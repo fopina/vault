@@ -156,7 +156,7 @@ GEM
     tilt (2.0.10)
     toml (0.2.0)
       parslet (~> 1.8.0)
-    tzinfo (1.2.5)
+    tzinfo (1.2.10)
       thread_safe (~> 0.1)
     uglifier (3.2.0)
       execjs (>= 0.3.0, < 3)
@@ -167,7 +167,6 @@ PLATFORMS
 
 DEPENDENCIES
   builder
-  bundler (= 2.0.1)
   middleman (~> 4.2)
   middleman-dato
   middleman-hashicorp!
