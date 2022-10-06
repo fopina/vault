@@ -19,8 +19,8 @@ GEM
       i18n (>= 0.7, < 2)
       minitest (~> 5.1)
       tzinfo (~> 1.1)
-    addressable (2.7.0)
-      public_suffix (>= 2.0.2, < 5.0)
+    addressable (2.8.1)
+      public_suffix (>= 2.0.2, < 6.0)
     backports (3.15.0)
     builder (3.2.3)
     cacert (0.5.0)
@@ -135,7 +135,7 @@ GEM
       activesupport (>= 3.1)
     parallel (1.18.0)
     parslet (1.8.2)
-    public_suffix (4.0.1)
+    public_suffix (5.0.0)
     pusher-client (0.6.2)
       json
       websocket (~> 1.0)
@@ -167,7 +167,6 @@ PLATFORMS
 
 DEPENDENCIES
   builder
-  bundler (= 2.0.1)
   middleman (~> 4.2)
   middleman-dato
   middleman-hashicorp!
