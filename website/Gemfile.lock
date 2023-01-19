@@ -139,7 +139,7 @@ GEM
     pusher-client (0.6.2)
       json
       websocket (~> 1.0)
-    rack (2.0.7)
+    rack (2.2.6.2)
     rack-livereload (0.3.17)
       rack
     rb-fsevent (0.10.3)
@@ -167,7 +167,6 @@ PLATFORMS
 
 DEPENDENCIES
   builder
-  bundler (= 2.0.1)
   middleman (~> 4.2)
   middleman-dato
   middleman-hashicorp!
