@@ -18,3 +18,4 @@ jobs:
         with:
           token: ${{ secrets.PAT }}
           upstream-repository: https://github.com/hashicorp/vault
+          upstream-tag: v1\.\d+\.\d+
