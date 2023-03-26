@@ -17,4 +17,4 @@ jobs:
       - uses: fopina/upstream-to-pr@v1
         with:
           token: ${{ secrets.PAT }}
-          upstream-repository: https://github.com/surface-security/surface
+          upstream-repository: https://github.com/hashicorp/vault
