@@ -6,8 +6,6 @@ on:
   workflow_dispatch:
     inputs: {}
 
-permissions: write-all
-
 jobs:
   autoupdate:
     runs-on: ubuntu-latest
@@ -15,8 +13,9 @@ jobs:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
+          token: ${{ secrets.PAT }}
       - uses: fopina/upstream-to-pr@feature/latest_tag
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT }}
           upstream-repository: https://github.com/hashicorp/vault
           upstream-tag: 'v\d+\.\d+\.\d+'
