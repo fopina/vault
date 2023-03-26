@@ -6,6 +6,8 @@ on:
   workflow_dispatch:
     inputs: {}
 
+permissions: write-all
+
 jobs:
   autoupdate:
     runs-on: ubuntu-latest
@@ -16,5 +18,5 @@ jobs:
       - uses: fopina/upstream-to-pr@feature/latest_tag
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          upstream-repository: https://github.com/OJ/gobuster
+          upstream-repository: https://github.com/hashicorp/vault
           upstream-tag: 'v\d+\.\d+\.\d+'
