@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package command
 
@@ -12,25 +12,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/cli"
 	log "github.com/hashicorp/go-hclog"
 	kv "github.com/hashicorp/vault-plugin-secrets-kv"
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/audit"
+	credUserpass "github.com/hashicorp/vault/builtin/credential/userpass"
 	"github.com/hashicorp/vault/builtin/logical/pki"
 	"github.com/hashicorp/vault/builtin/logical/ssh"
 	"github.com/hashicorp/vault/builtin/logical/transit"
-	"github.com/hashicorp/vault/helper/benchhelpers"
 	"github.com/hashicorp/vault/helper/builtinplugins"
-	"github.com/hashicorp/vault/sdk/helper/logging"
+	vaulthttp "github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/sdk/logical"
 	"github.com/hashicorp/vault/sdk/physical/inmem"
 	"github.com/hashicorp/vault/vault"
 	"github.com/hashicorp/vault/vault/seal"
-	"github.com/mitchellh/cli"
-
-	auditFile "github.com/hashicorp/vault/builtin/audit/file"
-	credUserpass "github.com/hashicorp/vault/builtin/credential/userpass"
-	vaulthttp "github.com/hashicorp/vault/http"
 )
 
 var (
@@ -41,7 +37,7 @@ var (
 	}
 
 	defaultVaultAuditBackends = map[string]audit.Factory{
-		"file": auditFile.Factory,
+		"file": audit.NewFileBackend,
 	}
 
 	defaultVaultLogicalBackends = map[string]logical.Factory{
@@ -71,6 +67,50 @@ func testVaultServer(tb testing.TB) (*api.Client, func()) {
 	return client, closer
 }
 
+func testVaultServerWithSecrets(ctx context.Context, tb testing.TB) (*api.Client, func()) {
+	tb.Helper()
+
+	client, _, closer := testVaultServerUnseal(tb)
+
+	// enable kv-v1 backend
+	if err := client.Sys().Mount("kv-v1/", &api.MountInput{
+		Type: "kv-v1",
+	}); err != nil {
+		tb.Fatal(err)
+	}
+
+	// enable kv-v2 backend
+	if err := client.Sys().Mount("kv-v2/", &api.MountInput{
+		Type: "kv-v2",
+	}); err != nil {
+		tb.Fatal(err)
+	}
+
+	// populate dummy secrets
+	for _, path := range []string{
+		"foo",
+		"app-1/foo",
+		"app-1/bar",
+		"app-1/nested/baz",
+	} {
+		if err := client.KVv1("kv-v1").Put(ctx, path, map[string]interface{}{
+			"user":     "test",
+			"password": "Hashi123",
+		}); err != nil {
+			tb.Fatal(err)
+		}
+
+		if _, err := client.KVv2("kv-v2").Put(ctx, path, map[string]interface{}{
+			"user":     "test",
+			"password": "Hashi123",
+		}); err != nil {
+			tb.Fatal(err)
+		}
+	}
+
+	return client, closer
+}
+
 func testVaultServerWithKVVersion(tb testing.TB, kvVersion string) (*api.Client, func()) {
 	tb.Helper()
 
@@ -81,13 +121,11 @@ func testVaultServerWithKVVersion(tb testing.TB, kvVersion string) (*api.Client,
 func testVaultServerAllBackends(tb testing.TB) (*api.Client, func()) {
 	tb.Helper()
 
+	handlers := newVaultHandlers()
 	client, _, closer := testVaultServerCoreConfig(tb, &vault.CoreConfig{
-		DisableMlock:       true,
-		DisableCache:       true,
-		Logger:             defaultVaultLogger,
-		CredentialBackends: credentialBackends,
-		AuditBackends:      auditBackends,
-		LogicalBackends:    logicalBackends,
+		CredentialBackends: handlers.credentialBackends,
+		AuditBackends:      handlers.auditBackends,
+		LogicalBackends:    handlers.logicalBackends,
 		BuiltinRegistry:    builtinplugins.Registry,
 	})
 	return client, closer
@@ -96,11 +134,8 @@ func testVaultServerAllBackends(tb testing.TB) (*api.Client, func()) {
 // testVaultServerAutoUnseal creates a test vault cluster and sets it up with auto unseal
 // the function returns a client, the recovery keys, and a closer function
 func testVaultServerAutoUnseal(tb testing.TB) (*api.Client, []string, func()) {
-	testSeal := seal.NewTestSeal(nil)
-	autoSeal, err := vault.NewAutoSeal(testSeal)
-	if err != nil {
-		tb.Fatal("unable to create autoseal", err)
-	}
+	testSeal, _ := seal.NewTestSeal(nil)
+	autoSeal := vault.NewAutoSeal(testSeal)
 	return testVaultServerUnsealWithKVVersionWithSeal(tb, "1", autoSeal)
 }
 
@@ -112,16 +147,8 @@ func testVaultServerUnseal(tb testing.TB) (*api.Client, []string, func()) {
 
 func testVaultServerUnsealWithKVVersionWithSeal(tb testing.TB, kvVersion string, seal vault.Seal) (*api.Client, []string, func()) {
 	tb.Helper()
-	logger := log.NewInterceptLogger(&log.LoggerOptions{
-		Output:     log.DefaultOutput,
-		Level:      log.Debug,
-		JSONFormat: logging.ParseEnvLogFormat() == logging.JSONFormat,
-	})
 
 	return testVaultServerCoreConfigWithOpts(tb, &vault.CoreConfig{
-		DisableMlock:       true,
-		DisableCache:       true,
-		Logger:             logger,
 		CredentialBackends: defaultVaultCredentialBackends,
 		AuditBackends:      defaultVaultAuditBackends,
 		LogicalBackends:    defaultVaultLogicalBackends,
@@ -141,9 +168,6 @@ func testVaultServerPluginDir(tb testing.TB, pluginDir string) (*api.Client, []s
 	tb.Helper()
 
 	return testVaultServerCoreConfig(tb, &vault.CoreConfig{
-		DisableMlock:       true,
-		DisableCache:       true,
-		Logger:             defaultVaultLogger,
 		CredentialBackends: defaultVaultCredentialBackends,
 		AuditBackends:      defaultVaultAuditBackends,
 		LogicalBackends:    defaultVaultLogicalBackends,
@@ -165,12 +189,12 @@ func testVaultServerCoreConfig(tb testing.TB, coreConfig *vault.CoreConfig) (*ap
 func testVaultServerCoreConfigWithOpts(tb testing.TB, coreConfig *vault.CoreConfig, opts *vault.TestClusterOptions) (*api.Client, []string, func()) {
 	tb.Helper()
 
-	cluster := vault.NewTestCluster(benchhelpers.TBtoT(tb), coreConfig, opts)
+	cluster := vault.NewTestCluster(tb, coreConfig, opts)
 	cluster.Start()
 
 	// Make it easy to get access to the active
 	core := cluster.Cores[0].Core
-	vault.TestWaitActive(benchhelpers.TBtoT(tb), core)
+	vault.TestWaitActive(tb, core)
 
 	// Get the client already setup for us!
 	client := cluster.Cores[0].Client
@@ -207,8 +231,6 @@ func testVaultServerUninit(tb testing.TB) (*api.Client, func()) {
 
 	core, err := vault.NewCore(&vault.CoreConfig{
 		DisableMlock:       true,
-		DisableCache:       true,
-		Logger:             defaultVaultLogger,
 		Physical:           inm,
 		CredentialBackends: defaultVaultCredentialBackends,
 		AuditBackends:      defaultVaultAuditBackends,

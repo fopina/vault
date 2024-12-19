@@ -1,9 +1,9 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
-import { inject as service } from '@ember/service';
+import { service } from '@ember/service';
 import Route from '@ember/routing/route';
 import UnloadModel from 'vault/mixins/unload-model-route';
 
@@ -18,9 +18,7 @@ export default Route.extend(UnloadModel, {
   },
 
   model(params) {
-    return this.version.hasFeature('Control Groups')
-      ? this.store.findRecord('control-group', params.accessor)
-      : null;
+    return this.version.hasControlGroups ? this.store.findRecord('control-group', params.accessor) : null;
   },
 
   actions: {

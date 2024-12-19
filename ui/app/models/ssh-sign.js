@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Model, { attr } from '@ember-data/model';
@@ -30,7 +30,10 @@ export default Model.extend({
     label: 'TTL',
     editType: 'ttl',
   }),
-  validPrincipals: attr('string'),
+  validPrincipals: attr('string', {
+    helpText:
+      'Specifies valid principals, either usernames or hostnames, that the certificate should be signed for. Required unless the role has specified allow_empty_principals.',
+  }),
   certType: attr('string', {
     defaultValue: 'user',
     label: 'Certificate Type',

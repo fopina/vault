@@ -1,11 +1,12 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package vault
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -13,6 +14,8 @@ import (
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/vault/helper/metricsutil"
 	"github.com/hashicorp/vault/helper/namespace"
+	"github.com/hashicorp/vault/helper/pluginconsts"
+	"github.com/hashicorp/vault/limits"
 	"github.com/hashicorp/vault/physical/raft"
 	"github.com/hashicorp/vault/sdk/helper/consts"
 	"github.com/hashicorp/vault/sdk/logical"
@@ -79,6 +82,20 @@ func (c *Core) metricsLoop(stopCh chan struct{}) {
 				c.metricSink.SetGaugeWithLabels([]string{"core", "replication", "write_undo_logs"}, 0, nil)
 			}
 
+			writeLimiter := c.GetRequestLimiter(limits.WriteLimiter)
+			if writeLimiter != nil {
+				c.metricSink.SetGaugeWithLabels([]string{
+					"core", "limits", "concurrency", limits.WriteLimiter,
+				}, float32(writeLimiter.EstimatedLimit()), nil)
+			}
+
+			pathLimiter := c.GetRequestLimiter(limits.SpecialPathLimiter)
+			if pathLimiter != nil {
+				c.metricSink.SetGaugeWithLabels([]string{
+					"core", "limits", "concurrency", limits.SpecialPathLimiter,
+				}, float32(pathLimiter.EstimatedLimit()), nil)
+			}
+
 			// Refresh the standby gauge, on all nodes
 			if haState != consts.Active {
 				c.metricSink.SetGaugeWithLabels([]string{"core", "active"}, 0, nil)
@@ -114,6 +131,29 @@ func (c *Core) metricsLoop(stopCh chan struct{}) {
 				c.metricSink.SetGaugeWithLabels([]string{"core", "replication", "dr", "secondary"}, 1, nil)
 			} else {
 				c.metricSink.SetGaugeWithLabels([]string{"core", "replication", "dr", "secondary"}, 0, nil)
+			}
+
+			if haState == consts.Active {
+				reindexState := c.ReindexStage()
+				if reindexState != nil {
+					c.metricSink.SetGaugeWithLabels([]string{"core", "replication", "reindex_stage"}, float32(*reindexState), nil)
+				} else {
+					c.metricSink.SetGaugeWithLabels([]string{"core", "replication", "reindex_stage"}, 0, nil)
+				}
+
+				buildProgress := c.BuildProgress()
+				if buildProgress != nil {
+					c.metricSink.SetGaugeWithLabels([]string{"core", "replication", "build_progress"}, float32(*buildProgress), nil)
+				} else {
+					c.metricSink.SetGaugeWithLabels([]string{"core", "replication", "build_progress"}, 0, nil)
+				}
+
+				buildTotal := c.BuildTotal()
+				if buildTotal != nil {
+					c.metricSink.SetGaugeWithLabels([]string{"core", "replication", "build_total"}, float32(*buildTotal), nil)
+				} else {
+					c.metricSink.SetGaugeWithLabels([]string{"core", "replication", "build_total"}, 0, nil)
+				}
 			}
 
 			// If we're using a raft backend, emit raft metrics
@@ -301,6 +341,12 @@ func (c *Core) emitMetricsActiveNode(stopCh chan struct{}) {
 			c.activeEntityGaugeCollector,
 			"",
 		},
+		{
+			[]string{"policy", "configured", "count"},
+			[]metrics.Label{{"gauge", "number_policies_by_type"}},
+			c.configuredPoliciesGaugeCollector,
+			"",
+		},
 	}
 
 	// Disable collection if configured, or if we're a performance standby
@@ -357,9 +403,9 @@ func (c *Core) findKvMounts() []*kvMount {
 	}
 
 	for _, entry := range c.mounts.Entries {
-		if entry.Type == "kv" || entry.Type == "generic" {
+		if entry.Type == pluginconsts.SecretEngineKV || entry.Type == pluginconsts.SecretEngineGeneric {
 			version, ok := entry.Options["version"]
-			if !ok {
+			if !ok || version == "" {
 				version = "1"
 			}
 			mounts = append(mounts, &kvMount{
@@ -408,9 +454,13 @@ func (c *Core) walkKvMountSecrets(ctx context.Context, m *kvMount) {
 		resp, err := c.router.Route(ctx, listRequest)
 		if err != nil {
 			c.kvCollectionErrorCount()
-			// ErrUnsupportedPath probably means that the mount is not there any more,
+			// ErrUnsupportedPath probably means that the mount is not there anymore,
 			// don't log those cases.
-			if !strings.Contains(err.Error(), logical.ErrUnsupportedPath.Error()) {
+			if !strings.Contains(err.Error(), logical.ErrUnsupportedPath.Error()) &&
+				// ErrSetupReadOnly means the mount's currently being set up.
+				// Nothing is wrong and there's no cause for alarm, just that we can't get data from it
+				// yet. We also shouldn't log these cases
+				!strings.Contains(err.Error(), logical.ErrSetupReadOnly.Error()) {
 				c.logger.Error("failed to perform internal KV list", "mount_point", m.MountPoint, "error", err)
 				break
 			}
@@ -439,6 +489,188 @@ func (c *Core) walkKvMountSecrets(ctx context.Context, m *kvMount) {
 			}
 		}
 	}
+}
+
+// GetTotalPkiRoles returns the total roles across all PKI mounts in Vault
+func (c *Core) GetTotalPkiRoles(ctx context.Context) int {
+	c.mountsLock.RLock()
+	defer c.mountsLock.RUnlock()
+
+	numRoles := 0
+
+	for _, entry := range c.mounts.Entries {
+		secretType := entry.Type
+		if secretType == pluginconsts.SecretEnginePki {
+			listRequest := &logical.Request{
+				Operation: logical.ListOperation,
+				Path:      entry.namespace.Path + entry.Path + "roles",
+			}
+			resp, err := c.router.Route(ctx, listRequest)
+			if err != nil || resp == nil {
+				continue
+			}
+			rawKeys, ok := resp.Data["keys"]
+			if !ok {
+				continue
+			}
+			keys, ok := rawKeys.([]string)
+			if ok {
+				numRoles += len(keys)
+			}
+		}
+	}
+	return numRoles
+}
+
+// GetTotalPkiIssuers returns the total issuers across all PKI mounts in Vault
+func (c *Core) GetTotalPkiIssuers(ctx context.Context) int {
+	c.mountsLock.RLock()
+	defer c.mountsLock.RUnlock()
+
+	numRoles := 0
+
+	for _, entry := range c.mounts.Entries {
+		secretType := entry.Type
+		if secretType == pluginconsts.SecretEnginePki {
+			listRequest := &logical.Request{
+				Operation: logical.ListOperation,
+				Path:      entry.namespace.Path + entry.Path + "issuers",
+			}
+			resp, err := c.router.Route(ctx, listRequest)
+			if err != nil || resp == nil {
+				continue
+			}
+			rawKeys, ok := resp.Data["keys"]
+			if !ok {
+				continue
+			}
+			keys, ok := rawKeys.([]string)
+			if ok {
+				numRoles += len(keys)
+			}
+		}
+	}
+	return numRoles
+}
+
+// getMinNamespaceSecrets is expected to be called on the output
+// of GetKvUsageMetrics to get the min number of secrets in a single namespace.
+func getMinNamespaceSecrets(mapOfNamespacesToSecrets map[string]int) int {
+	currentMin := 0
+	for _, n := range mapOfNamespacesToSecrets {
+		if n < currentMin || currentMin == 0 {
+			currentMin = n
+		}
+	}
+	return currentMin
+}
+
+// getMaxNamespaceSecrets is expected to be called on the output
+// of GetKvUsageMetrics to get the max number of secrets in a single namespace.
+func getMaxNamespaceSecrets(mapOfNamespacesToSecrets map[string]int) int {
+	currentMax := 0
+	for _, n := range mapOfNamespacesToSecrets {
+		if n > currentMax {
+			currentMax = n
+		}
+	}
+	return currentMax
+}
+
+// getTotalSecretsAcrossAllNamespaces is expected to be called on the output
+// of GetKvUsageMetrics to get the total number of secrets across namespaces.
+func getTotalSecretsAcrossAllNamespaces(mapOfNamespacesToSecrets map[string]int) int {
+	total := 0
+	for _, n := range mapOfNamespacesToSecrets {
+		total += n
+	}
+	return total
+}
+
+// getMeanNamespaceSecrets is expected to be called on the output
+// of GetKvUsageMetrics to get the mean number of secrets across namespaces.
+func getMeanNamespaceSecrets(mapOfNamespacesToSecrets map[string]int) int {
+	length := len(mapOfNamespacesToSecrets)
+	// Avoid divide by zero:
+	if length == 0 {
+		return length
+	}
+	return getTotalSecretsAcrossAllNamespaces(mapOfNamespacesToSecrets) / length
+}
+
+// GetSecretEngineUsageMetrics returns a map of secret engine mount types to the number of those mounts that exist.
+func (c *Core) GetSecretEngineUsageMetrics() map[string]int {
+	mounts := make(map[string]int)
+
+	c.mountsLock.RLock()
+	defer c.mountsLock.RUnlock()
+
+	for _, entry := range c.mounts.Entries {
+		mountType := entry.Type
+		if _, ok := mounts[mountType]; !ok {
+			mounts[mountType] = 1
+		} else {
+			mounts[mountType] += 1
+		}
+	}
+	return mounts
+}
+
+// GetAuthMethodUsageMetrics returns a map of auth mount types to the number of those mounts that exist.
+func (c *Core) GetAuthMethodUsageMetrics() map[string]int {
+	mounts := make(map[string]int)
+
+	c.authLock.RLock()
+	defer c.authLock.RUnlock()
+
+	for _, entry := range c.auth.Entries {
+		authType := entry.Type
+		if _, ok := mounts[authType]; !ok {
+			mounts[authType] = 1
+		} else {
+			mounts[authType] += 1
+		}
+	}
+	return mounts
+}
+
+// GetKvUsageMetrics returns a map of namespace paths to KV secret counts within those namespaces.
+func (c *Core) GetKvUsageMetrics(ctx context.Context, kvVersion string) (map[string]int, error) {
+	mounts := c.findKvMounts()
+	results := make(map[string]int)
+
+	if kvVersion == "1" || kvVersion == "2" {
+		var newMounts []*kvMount
+		for _, mount := range mounts {
+			if mount.Version == kvVersion {
+				newMounts = append(newMounts, mount)
+			}
+		}
+		mounts = newMounts
+	} else if kvVersion != "0" {
+		return results, fmt.Errorf("kv version %s not supported, must be 0, 1, or 2", kvVersion)
+	}
+
+	for _, m := range mounts {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("context expired")
+		default:
+			break
+		}
+
+		c.walkKvMountSecrets(ctx, m)
+
+		_, ok := results[m.Namespace.Path]
+		if ok {
+			// we need to add, not overwrite
+			results[m.Namespace.Path] += m.NumSecrets
+		} else {
+			results[m.Namespace.Path] = m.NumSecrets
+		}
+	}
+
+	return results, nil
 }
 
 func (c *Core) kvSecretGaugeCollector(ctx context.Context) ([]metricsutil.GaugeLabelValues, error) {
@@ -564,4 +796,42 @@ func (c *Core) inFlightReqGaugeMetric() {
 	totalInFlightReq := c.inFlightReqData.InFlightReqCount.Load()
 	// Adding a gauge metric to capture total number of inflight requests
 	c.metricSink.SetGaugeWithLabels([]string{"core", "in_flight_requests"}, float32(totalInFlightReq), nil)
+}
+
+// configuredPoliciesGaugeCollector is used to collect gauge label values for the `vault.policy.configured.count` metric
+func (c *Core) configuredPoliciesGaugeCollector(ctx context.Context) ([]metricsutil.GaugeLabelValues, error) {
+	c.stateLock.RLock()
+	policyStore := c.policyStore
+	c.stateLock.RUnlock()
+
+	if policyStore == nil {
+		return []metricsutil.GaugeLabelValues{}, nil
+	}
+
+	ctx = namespace.RootContext(ctx)
+	namespaces := c.collectNamespaces()
+
+	policyTypes := []PolicyType{
+		PolicyTypeACL,
+		PolicyTypeRGP,
+		PolicyTypeEGP,
+	}
+	var values []metricsutil.GaugeLabelValues
+
+	for _, pt := range policyTypes {
+		policies, err := policyStore.policiesByNamespaces(ctx, pt, namespaces)
+		if err != nil {
+			return []metricsutil.GaugeLabelValues{}, err
+		}
+
+		v := metricsutil.GaugeLabelValues{}
+		v.Labels = []metricsutil.Label{{
+			"policy_type",
+			pt.String(),
+		}}
+		v.Value = float32(len(policies))
+		values = append(values, v)
+	}
+
+	return values, nil
 }

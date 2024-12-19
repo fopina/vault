@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package gcs
 
@@ -8,7 +8,7 @@ import (
 	"crypto/md5"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -230,7 +230,7 @@ func (b *Backend) Get(ctx context.Context, key string) (retEntry *physical.Entry
 		}
 	}()
 
-	value, err := ioutil.ReadAll(r)
+	value, err := io.ReadAll(r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read value into a string: %w", err)
 	}

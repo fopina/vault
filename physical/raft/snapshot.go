@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package raft
 
@@ -19,12 +19,11 @@ import (
 
 	"github.com/golang/protobuf/proto"
 	log "github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/raft"
 	"github.com/hashicorp/vault/sdk/plugin/pb"
 	"github.com/rboyer/safeio"
 	bolt "go.etcd.io/bbolt"
 	"go.uber.org/atomic"
-
-	"github.com/hashicorp/raft"
 )
 
 const (
@@ -150,7 +149,7 @@ func (f *BoltSnapshotStore) List() ([]*raft.SnapshotMeta, error) {
 	return []*raft.SnapshotMeta{meta}, nil
 }
 
-// getBoltSnapshotMeta returns the fsm's latest state and configuration.
+// getMetaFromFSM returns the fsm's latest state and configuration.
 func (f *BoltSnapshotStore) getMetaFromFSM() (*raft.SnapshotMeta, error) {
 	latestIndex, latestConfig := f.fsm.LatestState()
 	meta := &raft.SnapshotMeta{
@@ -268,7 +267,7 @@ func (f *BoltSnapshotStore) openFromFile(id string) (*raft.SnapshotMeta, io.Read
 	filename := filepath.Join(f.path, id, databaseFilename)
 	installer := &boltSnapshotInstaller{
 		meta:       meta,
-		ReadCloser: ioutil.NopCloser(strings.NewReader(filename)),
+		ReadCloser: io.NopCloser(strings.NewReader(filename)),
 		filename:   filename,
 	}
 

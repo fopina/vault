@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package vault
 
@@ -461,6 +461,46 @@ func TestIdentityStore_AliasUpdate(t *testing.T) {
 				"custom_metadata": map[string]string{},
 			},
 		},
+		{
+			name: "only-metadata",
+			createData: map[string]interface{}{
+				"name":           "only",
+				"mount_accessor": githubAccessor,
+				"custom_metadata": map[string]string{
+					"foo": "bar",
+				},
+			},
+			updateData: map[string]interface{}{
+				"custom_metadata": map[string]string{
+					"bar": "baz",
+				},
+			},
+		},
+		{
+			name: "only-metadata-clear",
+			createData: map[string]interface{}{
+				"name":           "only-clear",
+				"mount_accessor": githubAccessor,
+				"custom_metadata": map[string]string{
+					"foo": "bar",
+				},
+			},
+			updateData: map[string]interface{}{
+				"custom_metadata": map[string]string{},
+			},
+		},
+		{
+			name: "only-metadata-none-before",
+			createData: map[string]interface{}{
+				"name":           "no-metadata",
+				"mount_accessor": githubAccessor,
+			},
+			updateData: map[string]interface{}{
+				"custom_metadata": map[string]string{
+					"foo": "bar",
+				},
+			},
+		},
 	}
 
 	handleRequest := func(t *testing.T, req *logical.Request) *logical.Response {
@@ -602,7 +642,6 @@ func TestIdentityStore_AliasMove_DuplicateAccessor(t *testing.T) {
 	aliasReq.Data = updateData
 	aliasReq.Path = "entity-alias/id/" + alias2ID
 	resp, err = is.HandleRequest(ctx, aliasReq)
-
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -675,7 +714,6 @@ func TestIdentityStore_AliasUpdate_DuplicateAccessor(t *testing.T) {
 	aliasReq.Data = updateData
 	aliasReq.Path = "entity-alias/id/" + alias2ID
 	resp, err = is.HandleRequest(ctx, aliasReq)
-
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -729,7 +767,6 @@ func TestIdentityStore_AliasCreate_DuplicateAccessor(t *testing.T) {
 
 	// This will try to create a new alias with the same accessor and entity
 	resp, err = is.HandleRequest(ctx, aliasReq)
-
 	if err != nil {
 		t.Fatal(err)
 	}

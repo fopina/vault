@@ -152,6 +152,7 @@ func (g *gRPCServer) NewUser(ctx context.Context, req *proto.NewUserRequest) (*p
 		CredentialType:     CredentialType(req.GetCredentialType()),
 		Password:           req.GetPassword(),
 		PublicKey:          req.GetPublicKey(),
+		Subject:            req.GetSubject(),
 		Expiration:         expiration,
 		Statements:         getStatementsFromProto(req.GetStatements()),
 		RollbackStatements: getStatementsFromProto(req.GetRollbackStatements()),
@@ -221,11 +222,12 @@ func getUpdateUserRequest(req *proto.UpdateUserRequest) (UpdateUserRequest, erro
 	}
 
 	dbReq := UpdateUserRequest{
-		Username:       req.GetUsername(),
-		CredentialType: CredentialType(req.GetCredentialType()),
-		Password:       password,
-		PublicKey:      publicKey,
-		Expiration:     expiration,
+		Username:            req.GetUsername(),
+		CredentialType:      CredentialType(req.GetCredentialType()),
+		Password:            password,
+		PublicKey:           publicKey,
+		Expiration:          expiration,
+		SelfManagedPassword: req.SelfManagedPassword,
 	}
 
 	if !hasChange(dbReq) {

@@ -1,11 +1,10 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { Response } from 'miragejs';
 import Ember from 'ember';
-import fetch from 'fetch';
 
 // initial auth response cache -- lookup by mfa_request_id key
 const authResponses = {};

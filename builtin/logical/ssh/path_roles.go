@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package ssh
 
@@ -66,11 +66,17 @@ type sshRole struct {
 	AlgorithmSigner            string            `mapstructure:"algorithm_signer" json:"algorithm_signer"`
 	Version                    int               `mapstructure:"role_version" json:"role_version"`
 	NotBeforeDuration          time.Duration     `mapstructure:"not_before_duration" json:"not_before_duration"`
+	AllowEmptyPrincipals       bool              `mapstructure:"allow_empty_principals" json:"allow_empty_principals"`
 }
 
 func pathListRoles(b *backend) *framework.Path {
 	return &framework.Path{
 		Pattern: "roles/?$",
+
+		DisplayAttrs: &framework.DisplayAttributes{
+			OperationPrefix: operationPrefixSSH,
+			OperationSuffix: "roles",
+		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
 			logical.ListOperation: b.pathRoleList,
@@ -84,6 +90,12 @@ func pathListRoles(b *backend) *framework.Path {
 func pathRoles(b *backend) *framework.Path {
 	return &framework.Path{
 		Pattern: "roles/" + framework.GenericNameWithAtRegex("role"),
+
+		DisplayAttrs: &framework.DisplayAttributes{
+			OperationPrefix: operationPrefixSSH,
+			OperationSuffix: "role",
+		},
+
 		Fields: map[string]*framework.FieldSchema{
 			"role": {
 				Type: framework.TypeString,
@@ -352,6 +364,11 @@ func pathRoles(b *backend) *framework.Path {
 					Value: 30,
 				},
 			},
+			"allow_empty_principals": {
+				Type:        framework.TypeBool,
+				Description: `Whether to allow issuing certificates with no valid principals (meaning any valid principal).  Exists for backwards compatibility only, the default of false is highly recommended.`,
+				Default:     false,
+			},
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
@@ -488,6 +505,7 @@ func (b *backend) createCARole(allowedUsers, defaultUser, signer string, data *f
 		AlgorithmSigner:           signer,
 		Version:                   roleEntryVersion,
 		NotBeforeDuration:         time.Duration(data.Get("not_before_duration").(int)) * time.Second,
+		AllowEmptyPrincipals:      data.Get("allow_empty_principals").(bool),
 	}
 
 	if !role.AllowUserCertificates && !role.AllowHostCertificates {
@@ -680,6 +698,7 @@ func (b *backend) parseRole(role *sshRole) (map[string]interface{}, error) {
 			"allowed_user_key_lengths":    role.AllowedUserKeyTypesLengths,
 			"algorithm_signer":            role.AlgorithmSigner,
 			"not_before_duration":         int64(role.NotBeforeDuration.Seconds()),
+			"allow_empty_principals":      role.AllowEmptyPrincipals,
 		}
 	case KeyTypeDynamic:
 		return nil, fmt.Errorf("dynamic key type roles are no longer supported")
