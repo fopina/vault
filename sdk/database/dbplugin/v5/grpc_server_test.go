@@ -11,16 +11,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/vault/sdk/logical"
-	"google.golang.org/protobuf/types/known/structpb"
-
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/timestamp"
 	"github.com/hashicorp/vault/sdk/database/dbplugin/v5/proto"
 	"github.com/hashicorp/vault/sdk/helper/pluginutil"
+	"github.com/hashicorp/vault/sdk/logical"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // Before minValidSeconds in ptypes package
@@ -549,6 +548,19 @@ func TestGRPCServer_Close(t *testing.T) {
 			assertFunc: func(t *testing.T, g gRPCServer) {
 				if len(g.instances) != 0 {
 					t.Fatalf("err expected instances map to be empty")
+				}
+			},
+		},
+		"error path for multiplexed plugin": {
+			db: fakeDatabase{
+				closeErr: errors.New("close error"),
+			},
+			expectErr:     true,
+			expectCode:    codes.Internal,
+			grpcSetupFunc: testGrpcServer,
+			assertFunc: func(t *testing.T, g gRPCServer) {
+				if len(g.instances) != 1 {
+					t.Fatalf("err expected instances map to contain exactly 1 element")
 				}
 			},
 		},
