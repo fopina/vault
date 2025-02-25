@@ -7,9 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/golang/protobuf/ptypes"
+
 	"github.com/hashicorp/vault/sdk/database/dbplugin/v5/proto"
 	"github.com/hashicorp/vault/sdk/helper/pluginutil"
 	"github.com/hashicorp/vault/sdk/logical"
@@ -23,6 +26,7 @@ var (
 )
 
 type gRPCClient struct {
+	entGRPCClient
 	client        proto.DatabaseClient
 	versionClient logical.PluginVersionClient
 	doneCtx       context.Context
@@ -104,6 +108,10 @@ func newUserReqToProto(req NewUserRequest) (*proto.NewUserRequest, error) {
 		if len(req.PublicKey) == 0 {
 			return nil, fmt.Errorf("missing public key credential")
 		}
+	case CredentialTypeClientCertificate:
+		if req.Subject == "" {
+			return nil, fmt.Errorf("missing certificate subject")
+		}
 	default:
 		return nil, fmt.Errorf("unknown credential type")
 	}
@@ -121,6 +129,7 @@ func newUserReqToProto(req NewUserRequest) (*proto.NewUserRequest, error) {
 		CredentialType: int32(req.CredentialType),
 		Password:       req.Password,
 		PublicKey:      req.PublicKey,
+		Subject:        req.Subject,
 		Expiration:     expiration,
 		Statements: &proto.Statements{
 			Commands: req.Statements.Commands,
@@ -194,11 +203,12 @@ func updateUserReqToProto(req UpdateUserRequest) (*proto.UpdateUserRequest, erro
 	}
 
 	rpcReq := &proto.UpdateUserRequest{
-		Username:       req.Username,
-		CredentialType: int32(req.CredentialType),
-		Password:       password,
-		PublicKey:      publicKey,
-		Expiration:     expiration,
+		Username:            req.Username,
+		CredentialType:      int32(req.CredentialType),
+		Password:            password,
+		PublicKey:           publicKey,
+		Expiration:          expiration,
+		SelfManagedPassword: req.SelfManagedPassword,
 	}
 	return rpcReq, nil
 }
@@ -264,7 +274,7 @@ func deleteUserRespFromProto(rpcResp *proto.DeleteUserResponse) (DeleteUserRespo
 }
 
 func (c gRPCClient) Type() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := getContextWithTimeout(pluginutil.PluginGRPCTimeoutType)
 	defer cancel()
 
 	typeResp, err := c.client.Type(ctx, &proto.Empty{})
@@ -277,16 +287,10 @@ func (c gRPCClient) Type() (string, error) {
 	return typeResp.GetType(), nil
 }
 
-func (c gRPCClient) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	_, err := c.client.Close(ctx, &proto.Empty{})
-	if err != nil {
-		if c.doneCtx.Err() != nil {
-			return ErrPluginShutdown
-		}
-		return err
+func getContextWithTimeout(env string) (context.Context, context.CancelFunc) {
+	timeout := 1 // default timeout
+	if envTimeout, err := strconv.Atoi(os.Getenv(env)); err == nil && envTimeout > 0 {
+		timeout = envTimeout
 	}
-	return nil
+	return context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 }

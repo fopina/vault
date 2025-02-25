@@ -1,11 +1,11 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package api
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"os"
 	"testing"
@@ -54,7 +54,7 @@ func TestFeatureFlags(t *testing.T) {
 		}
 		defer resp.Body.Close()
 
-		httpRespBody, err := ioutil.ReadAll(resp.Body)
+		httpRespBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			t.Fatal(err)
 		}

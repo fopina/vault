@@ -13,8 +13,10 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	mathrand "math/rand"
@@ -56,7 +58,7 @@ func TestCertBundleConversion(t *testing.T) {
 		err = compareCertBundleToParsedCertBundle(cbut, pcbut)
 		if err != nil {
 			t.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
-			t.Errorf(err.Error())
+			t.Error(err.Error())
 		}
 
 		cbut, err := pcbut.ToCertBundle()
@@ -66,7 +68,7 @@ func TestCertBundleConversion(t *testing.T) {
 
 		err = compareCertBundleToParsedCertBundle(cbut, pcbut)
 		if err != nil {
-			t.Fatalf(err.Error())
+			t.Fatal(err.Error())
 		}
 	}
 }
@@ -130,7 +132,7 @@ func TestCertBundleParsing(t *testing.T) {
 		err = compareCertBundleToParsedCertBundle(cbut, pcbut)
 		if err != nil {
 			t.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
-			t.Fatalf(err.Error())
+			t.Fatal(err.Error())
 		}
 
 		dataMap := structs.New(cbut).Map()
@@ -142,7 +144,7 @@ func TestCertBundleParsing(t *testing.T) {
 		err = compareCertBundleToParsedCertBundle(cbut, pcbut)
 		if err != nil {
 			t.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
-			t.Fatalf(err.Error())
+			t.Fatal(err.Error())
 		}
 
 		pcbut, err = ParsePEMBundle(cbut.ToPEMBundle())
@@ -153,14 +155,14 @@ func TestCertBundleParsing(t *testing.T) {
 		err = compareCertBundleToParsedCertBundle(cbut, pcbut)
 		if err != nil {
 			t.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
-			t.Fatalf(err.Error())
+			t.Fatal(err.Error())
 		}
 	}
 }
 
 func compareCertBundleToParsedCertBundle(cbut *CertBundle, pcbut *ParsedCertBundle) error {
 	if cbut == nil {
-		return fmt.Errorf("got nil bundle")
+		return errors.New("got nil bundle")
 	}
 	if pcbut == nil {
 		return fmt.Errorf("got nil parsed bundle")
@@ -279,7 +281,7 @@ func TestCSRBundleConversion(t *testing.T) {
 
 		err = compareCSRBundleToParsedCSRBundle(csrbut, pcsrbut)
 		if err != nil {
-			t.Fatalf(err.Error())
+			t.Fatal(err.Error())
 		}
 
 		csrbut, err = pcsrbut.ToCSRBundle()
@@ -289,7 +291,7 @@ func TestCSRBundleConversion(t *testing.T) {
 
 		err = compareCSRBundleToParsedCSRBundle(csrbut, pcsrbut)
 		if err != nil {
-			t.Fatalf(err.Error())
+			t.Fatal(err.Error())
 		}
 	}
 }
@@ -915,6 +917,10 @@ func TestNotAfterValues(t *testing.T) {
 	if PermitNotAfterBehavior != 2 {
 		t.Fatalf("Expected PermitNotAfterBehavior=%v to have value 2", PermitNotAfterBehavior)
 	}
+
+	if AlwaysEnforceErr != 3 {
+		t.Fatalf("Expected AlwaysEnforceErr=%v to have value 3", AlwaysEnforceErr)
+	}
 }
 
 func TestSignatureAlgorithmRoundTripping(t *testing.T) {
@@ -943,6 +949,162 @@ func TestSignatureAlgorithmRoundTripping(t *testing.T) {
 			t.Fatalf("%v=%v is present in InvSignatureAlgorithmNames but forwards for %v has different value: %v", leftValue, name, name, rightValue)
 		}
 	}
+}
+
+// TestParseBasicConstraintExtension Verify extension generation and parsing of x509 basic constraint extensions
+// works as expected.
+func TestBasicConstraintExtension(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		isCA       bool
+		maxPathLen int
+	}{
+		{"empty-seq", false, -1},
+		{"just-ca-true", true, -1},
+		{"just-ca-with-maxpathlen", true, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ext, err := CreateBasicConstraintExtension(tt.isCA, tt.maxPathLen)
+			if err != nil {
+				t.Fatalf("failed generating basic extension: %v", err)
+			}
+
+			gotIsCa, gotMaxPathLen, err := ParseBasicConstraintExtension(ext)
+			if err != nil {
+				t.Fatalf("failed parsing basic extension: %v", err)
+			}
+
+			if tt.isCA != gotIsCa {
+				t.Fatalf("expected isCa (%v) got isCa (%v)", tt.isCA, gotIsCa)
+			}
+
+			if tt.maxPathLen != gotMaxPathLen {
+				t.Fatalf("expected maxPathLen (%v) got maxPathLen (%v)", tt.maxPathLen, gotMaxPathLen)
+			}
+		})
+	}
+
+	t.Run("bad-extension-oid", func(t *testing.T) {
+		// Test invalid type errors out
+		_, _, err := ParseBasicConstraintExtension(pkix.Extension{})
+		if err == nil {
+			t.Fatalf("should have failed parsing non-basic constraint extension")
+		}
+	})
+
+	t.Run("garbage-value", func(t *testing.T) {
+		extraBytes, err := asn1.Marshal("a string")
+		if err != nil {
+			t.Fatalf("failed encoding the struct: %v", err)
+		}
+		ext := pkix.Extension{
+			Id:    ExtensionBasicConstraintsOID,
+			Value: extraBytes,
+		}
+		_, _, err = ParseBasicConstraintExtension(ext)
+		if err == nil {
+			t.Fatalf("should have failed parsing basic constraint with extra information")
+		}
+	})
+}
+
+// TestIgnoreCSRSigning Make sure we validate the CSR by default and that we can override
+// the behavior disabling CSR signature checks
+func TestIgnoreCSRSigning(t *testing.T) {
+	t.Parallel()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed generating ca key: %v", err)
+	}
+	subjKeyID, err := GetSubjKeyID(caKey)
+	if err != nil {
+		t.Fatalf("failed generating ca subject key id: %v", err)
+	}
+	caCertTemplate := &x509.Certificate{
+		Subject: pkix.Name{
+			CommonName: "root.localhost",
+		},
+		SubjectKeyId:          subjKeyID,
+		DNSNames:              []string{"root.localhost"},
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		SerialNumber:          big.NewInt(mathrand.Int63()),
+		NotBefore:             time.Now().Add(-30 * time.Second),
+		NotAfter:              time.Now().Add(262980 * time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caBytes, err := x509.CreateCertificate(rand.Reader, caCertTemplate, caCertTemplate, caKey.Public(), caKey)
+	if err != nil {
+		t.Fatalf("failed creating ca certificate: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatalf("failed parsing ca certificate: %v", err)
+	}
+
+	signingBundle := &CAInfoBundle{
+		ParsedCertBundle: ParsedCertBundle{
+			PrivateKeyType:   ECPrivateKey,
+			PrivateKey:       caKey,
+			CertificateBytes: caBytes,
+			Certificate:      caCert,
+			CAChain:          nil,
+		},
+		URLs: &URLEntries{},
+	}
+
+	key := genEdDSA(t)
+	csr := &x509.CertificateRequest{
+		PublicKeyAlgorithm: x509.ECDSA,
+		PublicKey:          key.Public(),
+		Subject: pkix.Name{
+			CommonName: "test.dadgarcorp.com",
+		},
+	}
+	t.Run(fmt.Sprintf("ignore-csr-disabled"), func(t *testing.T) {
+		params := &CreationParameters{
+			URLs: &URLEntries{},
+		}
+		data := &CreationBundle{
+			Params:        params,
+			SigningBundle: signingBundle,
+			CSR:           csr,
+		}
+
+		_, err := SignCertificate(data)
+		if err == nil {
+			t.Fatalf("should have failed signing csr with ignore csr signature disabled")
+		}
+		if !strings.Contains(err.Error(), "request signature invalid") {
+			t.Fatalf("expected error to contain 'request signature invalid': got: %v", err)
+		}
+	})
+
+	t.Run(fmt.Sprintf("ignore-csr-enabled"), func(t *testing.T) {
+		params := &CreationParameters{
+			IgnoreCSRSignature: true,
+			URLs:               &URLEntries{},
+			NotAfter:           time.Now().Add(10000 * time.Hour),
+		}
+		data := &CreationBundle{
+			Params:        params,
+			SigningBundle: signingBundle,
+			CSR:           csr,
+		}
+
+		cert, err := SignCertificate(data)
+		if err != nil {
+			t.Fatalf("failed to sign certificate: %v", err)
+		}
+
+		if err := cert.Verify(); err != nil {
+			t.Fatalf("signature verification failed: %v", err)
+		}
+	})
 }
 
 func genRsaKey(t *testing.T) *rsa.PrivateKey {

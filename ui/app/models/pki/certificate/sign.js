@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { attr } from '@ember-data/model';
@@ -23,9 +23,6 @@ const generateFromRole = [
 ];
 @withFormFields(null, generateFromRole)
 export default class PkiCertificateSignModel extends PkiCertificateBaseModel {
-  getHelpUrl(backend) {
-    return `/v1/${backend}/sign/example?help=1`;
-  }
   @attr('string') role; // role name to create certificate against for request URL
 
   @attr('string', {
