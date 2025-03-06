@@ -85,6 +85,10 @@ type Response struct {
 	// Headers will contain the http headers from the plugin that it wishes to
 	// have as part of the output
 	Headers map[string][]string `json:"headers" structs:"headers" mapstructure:"headers"`
+
+	// MountType, if non-empty, provides some information about what kind
+	// of mount this secret came from.
+	MountType string `json:"mount_type" structs:"mount_type" mapstructure:"mount_type"`
 }
 
 // AddWarning adds a warning into the response's warning list
@@ -135,6 +139,15 @@ func ErrorResponse(text string, vargs ...interface{}) *Response {
 			"error": text,
 		},
 	}
+}
+
+// ErrorResponseWithData is used to format an error response with additional data returned
+// within the "data" sub-field of the Data field. Useful to return additional information to the client
+// and or appear within audited responses.
+func ErrorResponseWithData(data interface{}, text string, vargs ...interface{}) *Response {
+	resp := ErrorResponse(text, vargs...)
+	resp.Data["data"] = data
+	return resp
 }
 
 // ListResponse is used to format a response to a list operation.

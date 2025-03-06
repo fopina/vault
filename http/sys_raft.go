@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package http
 
@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	"github.com/hashicorp/go-secure-stdlib/tlsutil"
+	"github.com/hashicorp/vault/internalshared/configutil"
 	"github.com/hashicorp/vault/physical/raft"
 	"github.com/hashicorp/vault/vault"
 )
@@ -80,7 +81,7 @@ func handleSysRaftJoinPost(core *vault.Core, w http.ResponseWriter, r *http.Requ
 			AutoJoin:       req.AutoJoin,
 			AutoJoinScheme: req.AutoJoinScheme,
 			AutoJoinPort:   req.AutoJoinPort,
-			LeaderAPIAddr:  req.LeaderAPIAddr,
+			LeaderAPIAddr:  configutil.NormalizeAddr(req.LeaderAPIAddr),
 			TLSConfig:      tlsConfig,
 			Retry:          req.Retry,
 		},
