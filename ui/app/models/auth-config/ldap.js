@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { attr } from '@ember-data/model';
@@ -11,7 +11,6 @@ import fieldToAttrs from 'vault/utils/field-to-attrs';
 import { combineFieldGroups } from 'vault/utils/openapi-to-attrs';
 
 export default AuthConfig.extend({
-  useOpenAPI: true,
   certificate: attr({
     label: 'Certificate',
     editType: 'file',

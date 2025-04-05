@@ -1,23 +1,24 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Route from '@ember/routing/route';
 import ListRoute from 'core/mixins/list-route';
-import { inject as service } from '@ember/service';
+import { service } from '@ember/service';
 
 export default Route.extend(ListRoute, {
-  store: service(),
+  pagination: service(),
 
   model(params) {
     const itemType = this.modelFor('vault.cluster.access.identity');
     const modelType = `identity/${itemType}`;
-    return this.store
+    return this.pagination
       .lazyPaginatedQuery(modelType, {
         responsePath: 'data.keys',
         page: params.page,
         pageFilter: params.pageFilter,
+        sortBy: 'name',
       })
       .catch((err) => {
         if (err.httpStatus === 404) {
@@ -37,12 +38,12 @@ export default Route.extend(ListRoute, {
     willTransition(transition) {
       window.scrollTo(0, 0);
       if (transition.targetName !== this.routeName) {
-        this.store.clearAllDatasets();
+        this.pagination.clearDataset();
       }
       return true;
     },
     reload() {
-      this.store.clearAllDatasets();
+      this.pagination.clearDataset();
       this.refresh();
     },
   },

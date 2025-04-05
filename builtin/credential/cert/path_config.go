@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package cert
 
@@ -11,11 +11,16 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
-const maxCacheSize = 100000
+const maxOcspCacheSize = 100000
 
 func pathConfig(b *backend) *framework.Path {
 	return &framework.Path{
 		Pattern: "config",
+
+		DisplayAttrs: &framework.DisplayAttributes{
+			OperationPrefix: operationPrefixCert,
+		},
+
 		Fields: map[string]*framework.FieldSchema{
 			"disable_binding": {
 				Type:        framework.TypeBool,
@@ -32,11 +37,31 @@ func pathConfig(b *backend) *framework.Path {
 				Default:     100,
 				Description: `The size of the in memory OCSP response cache, shared by all configured certs`,
 			},
+			"role_cache_size": {
+				Type:        framework.TypeInt,
+				Default:     defaultRoleCacheSize,
+				Description: `The size of the in memory role cache`,
+			},
+			"enable_metadata_on_failures": {
+				Type:        framework.TypeBool,
+				Default:     false,
+				Description: `If set, metadata of the client certificate will be returned on authentication failures.`,
+			},
 		},
 
-		Callbacks: map[logical.Operation]framework.OperationFunc{
-			logical.UpdateOperation: b.pathConfigWrite,
-			logical.ReadOperation:   b.pathConfigRead,
+		Operations: map[logical.Operation]framework.OperationHandler{
+			logical.UpdateOperation: &framework.PathOperation{
+				Callback: b.pathConfigWrite,
+				DisplayAttrs: &framework.DisplayAttributes{
+					OperationVerb: "configure",
+				},
+			},
+			logical.ReadOperation: &framework.PathOperation{
+				Callback: b.pathConfigRead,
+				DisplayAttrs: &framework.DisplayAttributes{
+					OperationSuffix: "configuration",
+				},
+			},
 		},
 	}
 }
@@ -55,10 +80,20 @@ func (b *backend) pathConfigWrite(ctx context.Context, req *logical.Request, dat
 	}
 	if cacheSizeRaw, ok := data.GetOk("ocsp_cache_size"); ok {
 		cacheSize := cacheSizeRaw.(int)
-		if cacheSize < 2 || cacheSize > maxCacheSize {
-			return logical.ErrorResponse("invalid cache size, must be >= 2 and <= %d", maxCacheSize), nil
+		if cacheSize < 2 || cacheSize > maxOcspCacheSize {
+			return logical.ErrorResponse("invalid ocsp cache size, must be >= 2 and <= %d", maxOcspCacheSize), nil
 		}
 		config.OcspCacheSize = cacheSize
+	}
+	if cacheSizeRaw, ok := data.GetOk("role_cache_size"); ok {
+		cacheSize := cacheSizeRaw.(int)
+		if (cacheSize < 0 && cacheSize != -1) || cacheSize > maxRoleCacheSize {
+			return logical.ErrorResponse("invalid role cache size, must be <= %d or -1 to disable role caching", maxRoleCacheSize), nil
+		}
+		config.RoleCacheSize = cacheSize
+	}
+	if enableMetadataOnFailures, ok := data.GetOk("enable_metadata_on_failures"); ok {
+		config.EnableMetadataOnFailures = enableMetadataOnFailures.(bool)
 	}
 	if err := b.storeConfig(ctx, req.Storage, config); err != nil {
 		return nil, err
@@ -76,6 +111,8 @@ func (b *backend) pathConfigRead(ctx context.Context, req *logical.Request, d *f
 		"disable_binding":                cfg.DisableBinding,
 		"enable_identity_alias_metadata": cfg.EnableIdentityAliasMetadata,
 		"ocsp_cache_size":                cfg.OcspCacheSize,
+		"role_cache_size":                cfg.RoleCacheSize,
+		"enable_metadata_on_failures":    cfg.EnableMetadataOnFailures,
 	}
 
 	return &logical.Response{
@@ -104,4 +141,6 @@ type config struct {
 	DisableBinding              bool `json:"disable_binding"`
 	EnableIdentityAliasMetadata bool `json:"enable_identity_alias_metadata"`
 	OcspCacheSize               int  `json:"ocsp_cache_size"`
+	RoleCacheSize               int  `json:"role_cache_size"`
+	EnableMetadataOnFailures    bool `json:"enable_metadata_on_failures"`
 }

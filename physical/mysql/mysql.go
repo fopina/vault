@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package mysql
 
@@ -20,11 +20,11 @@ import (
 	"time"
 	"unicode"
 
-	log "github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/go-multierror"
-
 	metrics "github.com/armon/go-metrics"
 	mysql "github.com/go-sql-driver/mysql"
+	log "github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-multierror"
+	"github.com/hashicorp/go-secure-stdlib/permitpool"
 	"github.com/hashicorp/go-secure-stdlib/strutil"
 	"github.com/hashicorp/vault/sdk/physical"
 )
@@ -48,7 +48,7 @@ type MySQLBackend struct {
 	client       *sql.DB
 	statements   map[string]*sql.Stmt
 	logger       log.Logger
-	permitPool   *physical.PermitPool
+	permitPool   *permitpool.Pool
 	conf         map[string]string
 	redirectHost string
 	redirectPort int64
@@ -174,7 +174,7 @@ func NewMySQLBackend(conf map[string]string, logger log.Logger) (physical.Backen
 		client:      db,
 		statements:  make(map[string]*sql.Stmt),
 		logger:      logger,
-		permitPool:  physical.NewPermitPool(maxParInt),
+		permitPool:  permitpool.New(maxParInt),
 		conf:        conf,
 		haEnabled:   haEnabled,
 	}
@@ -366,7 +366,9 @@ func (m *MySQLBackend) prepare(name, query string) error {
 func (m *MySQLBackend) Put(ctx context.Context, entry *physical.Entry) error {
 	defer metrics.MeasureSince([]string{"mysql", "put"}, time.Now())
 
-	m.permitPool.Acquire()
+	if err := m.permitPool.Acquire(ctx); err != nil {
+		return err
+	}
 	defer m.permitPool.Release()
 
 	_, err := m.statements["put"].Exec(entry.Key, entry.Value)
@@ -380,7 +382,9 @@ func (m *MySQLBackend) Put(ctx context.Context, entry *physical.Entry) error {
 func (m *MySQLBackend) Get(ctx context.Context, key string) (*physical.Entry, error) {
 	defer metrics.MeasureSince([]string{"mysql", "get"}, time.Now())
 
-	m.permitPool.Acquire()
+	if err := m.permitPool.Acquire(ctx); err != nil {
+		return nil, err
+	}
 	defer m.permitPool.Release()
 
 	var result []byte
@@ -403,7 +407,9 @@ func (m *MySQLBackend) Get(ctx context.Context, key string) (*physical.Entry, er
 func (m *MySQLBackend) Delete(ctx context.Context, key string) error {
 	defer metrics.MeasureSince([]string{"mysql", "delete"}, time.Now())
 
-	m.permitPool.Acquire()
+	if err := m.permitPool.Acquire(ctx); err != nil {
+		return err
+	}
 	defer m.permitPool.Release()
 
 	_, err := m.statements["delete"].Exec(key)
@@ -418,7 +424,9 @@ func (m *MySQLBackend) Delete(ctx context.Context, key string) error {
 func (m *MySQLBackend) List(ctx context.Context, prefix string) ([]string, error) {
 	defer metrics.MeasureSince([]string{"mysql", "list"}, time.Now())
 
-	m.permitPool.Acquire()
+	if err := m.permitPool.Acquire(ctx); err != nil {
+		return nil, err
+	}
 	defer m.permitPool.Release()
 
 	// Add the % wildcard to the prefix to do the prefix search

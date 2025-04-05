@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package cluster
 
@@ -107,13 +107,31 @@ func (l *InmemLayer) Listeners() []NetworkListener {
 
 	l.listener = &inmemListener{
 		addr:         l.addr,
-		pendingConns: make(chan net.Conn),
+		pendingConns: make(chan net.Conn, 1),
 
 		stopped: atomic.NewBool(false),
 		stopCh:  make(chan struct{}),
 	}
 
 	return []NetworkListener{l.listener}
+}
+
+// Partition forces the inmem layer to disconnect itself from peers and prevents
+// creating new connections. The returned function will add all peers back
+// and re-enable connections
+func (l *InmemLayer) Partition() (unpartition func()) {
+	l.l.Lock()
+	peersCopy := make([]*InmemLayer, 0, len(l.peers))
+	for _, peer := range l.peers {
+		peersCopy = append(peersCopy, peer)
+	}
+	l.l.Unlock()
+	l.DisconnectAll()
+	return func() {
+		for _, peer := range peersCopy {
+			l.Connect(peer)
+		}
+	}
 }
 
 // Dial implements NetworkLayer.
@@ -132,7 +150,7 @@ func (l *InmemLayer) Dial(addr string, timeout time.Duration, tlsConfig *tls.Con
 	if l.forceTimeout == addr {
 		l.logger.Debug("forcing timeout", "addr", addr, "me", l.addr)
 
-		// gRPC sets a deadline of 20 seconds on the dail attempt, so
+		// gRPC sets a deadline of 20 seconds on the dial attempt, so
 		// matching that here.
 		time.Sleep(time.Second * 20)
 		l.l.Unlock()

@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package transit
 
@@ -32,6 +32,12 @@ type DecryptBatchResponseItem struct {
 func (b *backend) pathDecrypt() *framework.Path {
 	return &framework.Path{
 		Pattern: "decrypt/" + framework.GenericNameRegex("name"),
+
+		DisplayAttrs: &framework.DisplayAttributes{
+			OperationPrefix: operationPrefixTransit,
+			OperationVerb:   "decrypt",
+		},
+
 		Fields: map[string]*framework.FieldSchema{
 			"name": {
 				Type:        framework.TypeString,
@@ -42,6 +48,12 @@ func (b *backend) pathDecrypt() *framework.Path {
 				Type: framework.TypeString,
 				Description: `
 The ciphertext to decrypt, provided as returned by encrypt.`,
+			},
+
+			"padding_scheme": {
+				Type: framework.TypeString,
+				Description: `The padding scheme to use for decrypt. Currently only applies to RSA key types.
+Options are 'oaep' or 'pkcs1v15'. Defaults to 'oaep'`,
 			},
 
 			"context": {
@@ -124,6 +136,9 @@ func (b *backend) pathDecryptWrite(ctx context.Context, req *logical.Request, d 
 			Nonce:          d.Get("nonce").(string),
 			AssociatedData: d.Get("associated_data").(string),
 		}
+		if ps, ok := d.GetOk("padding_scheme"); ok {
+			batchInputItems[0].PaddingScheme = ps.(string)
+		}
 	}
 
 	batchResponseItems := make([]DecryptBatchResponseItem, len(batchInputItems))
@@ -178,6 +193,7 @@ func (b *backend) pathDecryptWrite(ctx context.Context, req *logical.Request, d 
 	if !b.System().CachingDisabled() {
 		p.Lock(false)
 	}
+	defer p.Unlock()
 
 	successesInBatch := false
 	for i, item := range batchInputItems {
@@ -185,33 +201,40 @@ func (b *backend) pathDecryptWrite(ctx context.Context, req *logical.Request, d 
 			continue
 		}
 
-		var factory interface{}
+		var factories []any
+		if item.PaddingScheme != "" {
+			paddingScheme, err := parsePaddingSchemeArg(p.Type, item.PaddingScheme)
+			if err != nil {
+				batchResponseItems[i].Error = fmt.Sprintf("'[%d].padding_scheme' invalid: %s", i, err.Error())
+				continue
+			}
+			factories = append(factories, paddingScheme)
+		}
 		if item.AssociatedData != "" {
 			if !p.Type.AssociatedDataSupported() {
 				batchResponseItems[i].Error = fmt.Sprintf("'[%d].associated_data' provided for non-AEAD cipher suite %v", i, p.Type.String())
 				continue
 			}
 
-			factory = AssocDataFactory{item.AssociatedData}
+			factories = append(factories, AssocDataFactory{item.AssociatedData})
 		}
 
-		var managedKeyFactory ManagedKeyFactory
 		if p.Type == keysutil.KeyType_MANAGED_KEY {
 			managedKeySystemView, ok := b.System().(logical.ManagedKeySystemView)
 			if !ok {
 				batchResponseItems[i].Error = errors.New("unsupported system view").Error()
 			}
 
-			managedKeyFactory = ManagedKeyFactory{
+			factories = append(factories, ManagedKeyFactory{
 				managedKeyParams: keysutil.ManagedKeyParameters{
 					ManagedKeySystemView: managedKeySystemView,
 					BackendUUID:          b.backendUUID,
 					Context:              ctx,
 				},
-			}
+			})
 		}
 
-		plaintext, err := p.DecryptWithFactory(item.DecodedContext, item.DecodedNonce, item.Ciphertext, factory, managedKeyFactory)
+		plaintext, err := p.DecryptWithFactory(item.DecodedContext, item.DecodedNonce, item.Ciphertext, factories...)
 		if err != nil {
 			switch err.(type) {
 			case errutil.InternalError:
@@ -237,8 +260,6 @@ func (b *backend) pathDecryptWrite(ctx context.Context, req *logical.Request, d 
 		}
 	} else {
 		if batchResponseItems[0].Error != "" {
-			p.Unlock()
-
 			if internalErrorInBatch {
 				return nil, errutil.InternalError{Err: batchResponseItems[0].Error}
 			}
@@ -249,8 +270,6 @@ func (b *backend) pathDecryptWrite(ctx context.Context, req *logical.Request, d 
 			"plaintext": batchResponseItems[0].Plaintext,
 		}
 	}
-
-	p.Unlock()
 
 	return batchRequestResponse(d, resp, req, successesInBatch, userErrorInBatch, internalErrorInBatch)
 }

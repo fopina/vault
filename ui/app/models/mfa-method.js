@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Model, { attr } from '@ember-data/model';
@@ -58,7 +58,7 @@ export default class MfaMethod extends Model {
   @attr('string', {
     label: 'Namespace',
   })
-  namespace_id;
+  namespace_path;
   @attr('string') mount_accessor;
 
   // PING ID
@@ -166,6 +166,15 @@ export default class MfaMethod extends Model {
 
   get name() {
     return this.type === 'totp' ? this.type.toUpperCase() : capitalize(this.type);
+  }
+
+  get icon() {
+    switch (this.type) {
+      case 'totp':
+        return 'history';
+      default:
+        return this.type;
+    }
   }
 
   get formFields() {
