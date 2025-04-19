@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Engine from '@ember/engine';
@@ -22,12 +22,13 @@ export default class PkiEngine extends Engine {
       'flash-messages',
       'namespace',
       'path-help',
-      'router',
+      'app-router',
       'secret-mount-path',
       'store',
+      'pagination',
       'version',
     ],
-    externalRoutes: ['secrets', 'secretsListRoot', 'secretsListRootConfiguration', 'externalMountIssuer'],
+    externalRoutes: ['secrets', 'secretsListRootConfiguration', 'externalMountIssuer'],
   };
 }
 

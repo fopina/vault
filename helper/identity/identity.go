@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package identity
 
@@ -56,6 +56,22 @@ func (e *Entity) UpsertAlias(alias *Alias) {
 		}
 	}
 	e.Aliases = append(e.Aliases, alias)
+}
+
+func (e *Entity) DeleteAliasByID(aliasID string) {
+	idx := -1
+	for i, item := range e.Aliases {
+		if item.ID == aliasID {
+			idx = i
+			break
+		}
+	}
+
+	if idx < 0 {
+		return
+	}
+
+	e.Aliases = append(e.Aliases[:idx], e.Aliases[idx+1:]...)
 }
 
 func (p *Alias) Clone() (*Alias, error) {

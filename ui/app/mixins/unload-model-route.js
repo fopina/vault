@@ -1,14 +1,16 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Mixin from '@ember/object/mixin';
 import removeRecord from 'vault/utils/remove-record';
+import { service } from '@ember/service';
 
 // removes Ember Data records from the cache when the model
 // changes or you move away from the current route
 export default Mixin.create({
+  store: service(),
   modelPath: 'model',
   unloadModel() {
     const { modelPath } = this;
@@ -19,7 +21,6 @@ export default Mixin.create({
       return;
     }
     removeRecord(this.store, model);
-    model.destroy();
     // it's important to unset the model on the controller since controllers are singletons
     this.controller.set(modelPath, null);
   },

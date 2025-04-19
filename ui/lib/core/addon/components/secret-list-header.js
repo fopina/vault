@@ -1,67 +1,34 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
-import { action } from '@ember/object';
-import { inject as service } from '@ember/service';
-import { tracked } from '@glimmer/tracking';
-import localStorage from 'vault/lib/local-storage';
 import Component from '@glimmer/component';
+import { supportedSecretBackends } from 'vault/helpers/supported-secret-backends';
+import { CONFIGURATION_ONLY } from 'vault/helpers/mountable-secret-engines';
 
 /**
  * @module SecretListHeader
  * SecretListHeader component is breadcrumb, title with icon and menu with tabs component.
  *
+ * Example is wrapped in back ticks because this component relies on routing and cannot render an isolated sample, so just rendering template sample
  * @example
- * ```js
- * <SecretListHeader
-   @model={{this.model}}
-   @backendCrumb={{hash
-    label=this.model.id
-    text=this.model.id
-    path="vault.cluster.secrets.backend.list-root"
-    model=this.model.id
-   }}
-  />
  * ```
+ * <SecretListHeader @model={{this.model}} />
+ * ```
+ *
  * @param {object} model - Model used to pull information about icon and title and backend type for navigation.
- * @param {string} [baseKey] - Provided for navigation on the breadcrumbs.
- * @param {object} [backendCrumb] - Includes label, text, path and model ID.
- * @param {boolean} [isEngine=false] - Changes link type if the component is being used inside an Ember engine.
+ * @param {boolean} [isConfigure=false] - Boolean to determine if the configure tab should be shown.
  */
 
 export default class SecretListHeader extends Component {
-  @service router;
-  @tracked hidePkiBetaModal = false;
-
   get isKV() {
     return ['kv', 'generic'].includes(this.args.model.engineType);
   }
 
-  get isPki() {
-    return this.args.model.engineType === 'pki';
-  }
-
-  get shouldHidePkiBetaModal() {
-    return localStorage.getItem('hidePkiBetaModal');
-  }
-
-  get windowOrigin() {
-    return window.location.origin;
-  }
-
-  @action
-  transitionToNewPki() {
-    this.router.transitionTo('vault.cluster.secrets.backend.pki.overview', this.args.model.id);
-  }
-
-  @action
-  toggleHidePkiBetaModal() {
-    this.hidePkiBetaModal = !this.hidePkiBetaModal;
-
-    this.hidePkiBetaModal
-      ? localStorage.setItem('hidePkiBetaModal', true)
-      : localStorage.removeItem('hidePkiBetaModal');
+  get showListTab() {
+    // only show the list tab if the engine is not a configuration only engine and the UI supports it
+    const { engineType } = this.args.model;
+    return supportedSecretBackends().includes(engineType) && !CONFIGURATION_ONLY.includes(engineType);
   }
 }

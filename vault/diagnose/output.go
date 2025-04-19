@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package diagnose
 
@@ -13,9 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mitchellh/go-wordwrap"
 	"go.opentelemetry.io/otel/attribute"
-
-	wordwrap "github.com/mitchellh/go-wordwrap"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -119,7 +118,7 @@ func (t *TelemetryCollector) OnStart(_ context.Context, s sdktrace.ReadWriteSpan
 	defer t.mu.Unlock()
 	t.spans[s.SpanContext().SpanID()] = s
 	if isMainSection(s) {
-		fmt.Fprintf(t.ui, status_unknown+s.Name())
+		fmt.Fprint(t.ui, status_unknown+s.Name())
 	}
 }
 

@@ -1,11 +1,12 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package transit
 
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 
 	"github.com/hashicorp/vault/helper/constants"
@@ -16,9 +17,50 @@ import (
 	"github.com/mitchellh/mapstructure"
 )
 
+var ErrNonceNotAllowed = errors.New("provided nonce not allowed for this key")
+
+type RewrapBatchRequestItem struct {
+	// Context for key derivation. This is required for derived keys.
+	Context string `json:"context" structs:"context" mapstructure:"context"`
+
+	// DecodedContext is the base64 decoded version of Context
+	DecodedContext []byte
+
+	// Ciphertext for decryption
+	Ciphertext string `json:"ciphertext" structs:"ciphertext" mapstructure:"ciphertext"`
+
+	// Nonce to be used when v1 convergent encryption is used
+	Nonce string `json:"nonce" structs:"nonce" mapstructure:"nonce"`
+
+	// The key version to be used for encryption
+	KeyVersion int `json:"key_version" structs:"key_version" mapstructure:"key_version"`
+
+	// DecodedNonce is the base64 decoded version of Nonce
+	DecodedNonce []byte
+
+	// Associated Data for AEAD ciphers
+	AssociatedData string `json:"associated_data" struct:"associated_data" mapstructure:"associated_data"`
+
+	// Reference is an arbitrary caller supplied string value that will be placed on the
+	// batch response to ease correlation between inputs and outputs
+	Reference string `json:"reference" structs:"reference" mapstructure:"reference"`
+
+	// EncryptPaddingScheme specifies the RSA padding scheme for encryption
+	EncryptPaddingScheme string `json:"encrypt_padding_scheme" structs:"encrypt_padding_scheme" mapstructure:"encrypt_padding_scheme"`
+
+	// DecryptPaddingScheme specifies the RSA padding scheme for decryption
+	DecryptPaddingScheme string `json:"decrypt_padding_scheme" structs:"decrypt_padding_scheme" mapstructure:"decrypt_padding_scheme"`
+}
+
 func (b *backend) pathRewrap() *framework.Path {
 	return &framework.Path{
 		Pattern: "rewrap/" + framework.GenericNameRegex("name"),
+
+		DisplayAttrs: &framework.DisplayAttributes{
+			OperationPrefix: operationPrefixTransit,
+			OperationVerb:   "rewrap",
+		},
+
 		Fields: map[string]*framework.FieldSchema{
 			"name": {
 				Type:        framework.TypeString,
@@ -28,6 +70,18 @@ func (b *backend) pathRewrap() *framework.Path {
 			"ciphertext": {
 				Type:        framework.TypeString,
 				Description: "Ciphertext value to rewrap",
+			},
+
+			"encrypt_padding_scheme": {
+				Type: framework.TypeString,
+				Description: `The padding scheme to use for rewrap's encrypt step. Currently only applies to RSA key types.
+Options are 'oaep' or 'pkcs1v15'. Defaults to 'oaep'`,
+			},
+
+			"decrypt_padding_scheme": {
+				Type: framework.TypeString,
+				Description: `The padding scheme to use for rewrap's decrypt step. Currently only applies to RSA key types.
+Options are 'oaep' or 'pkcs1v15'. Defaults to 'oaep'`,
 			},
 
 			"context": {
@@ -67,7 +121,7 @@ Any batch output will preserve the order of the batch input.`,
 
 func (b *backend) pathRewrapWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	batchInputRaw := d.Raw["batch_input"]
-	var batchInputItems []BatchRequestItem
+	var batchInputItems []RewrapBatchRequestItem
 	var err error
 	if batchInputRaw != nil {
 		err = mapstructure.Decode(batchInputRaw, &batchInputItems)
@@ -84,12 +138,18 @@ func (b *backend) pathRewrapWrite(ctx context.Context, req *logical.Request, d *
 			return logical.ErrorResponse("missing ciphertext to decrypt"), logical.ErrInvalidRequest
 		}
 
-		batchInputItems = make([]BatchRequestItem, 1)
-		batchInputItems[0] = BatchRequestItem{
+		batchInputItems = make([]RewrapBatchRequestItem, 1)
+		batchInputItems[0] = RewrapBatchRequestItem{
 			Ciphertext: ciphertext,
 			Context:    d.Get("context").(string),
 			Nonce:      d.Get("nonce").(string),
 			KeyVersion: d.Get("key_version").(int),
+		}
+		if ps, ok := d.GetOk("decrypt_padding_scheme"); ok {
+			batchInputItems[0].DecryptPaddingScheme = ps.(string)
+		}
+		if ps, ok := d.GetOk("encrypt_padding_scheme"); ok {
+			batchInputItems[0].EncryptPaddingScheme = ps.(string)
 		}
 	}
 
@@ -139,6 +199,7 @@ func (b *backend) pathRewrapWrite(ctx context.Context, req *logical.Request, d *
 	if !b.System().CachingDisabled() {
 		p.Lock(false)
 	}
+	defer p.Unlock()
 
 	warnAboutNonceUsage := false
 	for i, item := range batchInputItems {
@@ -146,39 +207,59 @@ func (b *backend) pathRewrapWrite(ctx context.Context, req *logical.Request, d *
 			continue
 		}
 
-		plaintext, err := p.Decrypt(item.DecodedContext, item.DecodedNonce, item.Ciphertext)
+		var factories []any
+		if item.DecryptPaddingScheme != "" {
+			paddingScheme, err := parsePaddingSchemeArg(p.Type, item.DecryptPaddingScheme)
+			if err != nil {
+				batchResponseItems[i].Error = fmt.Sprintf("'[%d].decrypt_padding_scheme' invalid: %s", i, err.Error())
+				continue
+			}
+			factories = append(factories, paddingScheme)
+		}
+		if item.Nonce != "" && !nonceAllowed(p) {
+			batchResponseItems[i].Error = ErrNonceNotAllowed.Error()
+			continue
+		}
+
+		plaintext, err := p.DecryptWithFactory(item.DecodedContext, item.DecodedNonce, item.Ciphertext, factories...)
 		if err != nil {
 			switch err.(type) {
 			case errutil.UserError:
 				batchResponseItems[i].Error = err.Error()
 				continue
 			default:
-				p.Unlock()
 				return nil, err
 			}
 		}
 
+		factories = make([]any, 0)
+		if item.EncryptPaddingScheme != "" {
+			paddingScheme, err := parsePaddingSchemeArg(p.Type, item.EncryptPaddingScheme)
+			if err != nil {
+				batchResponseItems[i].Error = fmt.Sprintf("'[%d].encrypt_padding_scheme' invalid: %s", i, err.Error())
+				continue
+			}
+			factories = append(factories, paddingScheme)
+			factories = append(factories, keysutil.PaddingScheme(item.EncryptPaddingScheme))
+		}
 		if !warnAboutNonceUsage && shouldWarnAboutNonceUsage(p, item.DecodedNonce) {
 			warnAboutNonceUsage = true
 		}
 
-		ciphertext, err := p.Encrypt(item.KeyVersion, item.DecodedContext, item.DecodedNonce, plaintext)
+		ciphertext, err := p.EncryptWithFactory(item.KeyVersion, item.DecodedContext, item.DecodedNonce, plaintext, factories...)
 		if err != nil {
 			switch err.(type) {
 			case errutil.UserError:
 				batchResponseItems[i].Error = err.Error()
 				continue
 			case errutil.InternalError:
-				p.Unlock()
 				return nil, err
 			default:
-				p.Unlock()
 				return nil, err
 			}
 		}
 
 		if ciphertext == "" {
-			p.Unlock()
 			return nil, fmt.Errorf("empty ciphertext returned for input item %d", i)
 		}
 
@@ -202,7 +283,6 @@ func (b *backend) pathRewrapWrite(ctx context.Context, req *logical.Request, d *
 		}
 	} else {
 		if batchResponseItems[0].Error != "" {
-			p.Unlock()
 			return logical.ErrorResponse(batchResponseItems[0].Error), logical.ErrInvalidRequest
 		}
 		resp.Data = map[string]interface{}{
@@ -215,7 +295,6 @@ func (b *backend) pathRewrapWrite(ctx context.Context, req *logical.Request, d *
 		resp.AddWarning("A provided nonce value was used within FIPS mode, this violates FIPS 140 compliance.")
 	}
 
-	p.Unlock()
 	return resp, nil
 }
 

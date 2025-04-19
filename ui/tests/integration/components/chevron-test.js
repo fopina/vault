@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { module, test } from 'qunit';
@@ -17,13 +17,13 @@ module('Integration | Component | chevron', function (hooks) {
     // Handle any actions with this.set('myAction', function(val) { ... });
 
     await render(hbs`<Chevron />`);
-    assert.dom('.flight-icon').exists('renders');
+    assert.dom('.hds-icon').exists('renders');
 
     await render(hbs`<Chevron @isButton={{true}} />`);
-    assert.dom('.flight-icon').hasClass('hs-icon-button-right', 'renders');
+    assert.dom('.hds-icon').hasClass('hs-icon-button-right', 'renders');
 
     await render(hbs`<Chevron @direction='left' @isButton={{true}} />`);
-    assert.dom('.flight-icon').doesNotHaveClass('hs-icon-button-right', 'renders');
+    assert.dom('.hds-icon').doesNotHaveClass('hs-icon-button-right', 'renders');
 
     const promise = waitForError();
     render(hbs`<Chevron @direction='lol' />`);
