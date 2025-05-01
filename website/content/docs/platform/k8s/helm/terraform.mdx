@@ -2,11 +2,11 @@
 layout: 'docs'
 page_title: 'Configure Vault Helm using Terraform'
 sidebar_current: 'docs-platform-k8s-terraform'
-description: |-
-  Describes how to configure the Vault Helm chart using Terraform
+description: >-
+  Describes how to configure the Vault Helm chart using Terraform.
 ---
 
-# Configuring Vault Helm with Terraform
+# Configure Vault Helm using Terraform
 
 Terraform may also be used to configure and deploy the Vault Helm chart, by using the [Helm provider](https://registry.terraform.io/providers/hashicorp/helm/latest/docs).
 
@@ -65,7 +65,7 @@ resource "helm_release" "vault" {
 
 The values file can also be used directly in the Terraform configuration with the [`values` directive](https://registry.terraform.io/providers/hashicorp/helm/latest/docs/resources/release#values#values).
 
-## Further Examples
+## Further examples
 
 ### Vault config as a multi-line string
 

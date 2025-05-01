@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package server
 
@@ -11,10 +11,12 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/hashicorp/go-discover"
 	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/go-secure-stdlib/parseutil"
 	"github.com/hashicorp/hcl"
@@ -24,6 +26,8 @@ import (
 	"github.com/hashicorp/vault/internalshared/configutil"
 	"github.com/hashicorp/vault/sdk/helper/consts"
 	"github.com/hashicorp/vault/sdk/helper/strutil"
+	"github.com/hashicorp/vault/sdk/helper/testcluster"
+	"github.com/mitchellh/mapstructure"
 )
 
 const (
@@ -32,14 +36,8 @@ const (
 	VaultDevKeyFilename  = "vault-key.pem"
 )
 
-var (
-	entConfigValidate = func(_ *Config, _ string) []configutil.ConfigError {
-		return nil
-	}
-
-	// Modified internally for testing.
-	validExperiments = experiments.ValidExperiments()
-)
+// Modified internally for testing.
+var validExperiments = experiments.ValidExperiments()
 
 // Config is the configuration for the vault server.
 type Config struct {
@@ -73,6 +71,7 @@ type Config struct {
 	ClusterCipherSuites string `hcl:"cluster_cipher_suites"`
 
 	PluginDirectory string `hcl:"plugin_directory"`
+	PluginTmpdir    string `hcl:"plugin_tmpdir"`
 
 	PluginFileUid int `hcl:"plugin_file_uid"`
 
@@ -110,12 +109,17 @@ type Config struct {
 
 	DetectDeadlocks string `hcl:"detect_deadlocks"`
 
+	ImpreciseLeaseRoleTracking bool `hcl:"imprecise_lease_role_tracking"`
+
 	EnableResponseHeaderRaftNodeID    bool        `hcl:"-"`
 	EnableResponseHeaderRaftNodeIDRaw interface{} `hcl:"enable_response_header_raft_node_id"`
 
 	License          string `hcl:"-"`
 	LicensePath      string `hcl:"license_path"`
 	DisableSSCTokens bool   `hcl:"-"`
+
+	EnablePostUnsealTrace bool   `hcl:"enable_post_unseal_trace"`
+	PostUnsealTraceDir    string `hcl:"post_unseal_trace_directory"`
 }
 
 const (
@@ -133,12 +137,8 @@ func (c *Config) Validate(sourceFilePath string) []configutil.ConfigError {
 	for _, l := range c.Listeners {
 		results = append(results, l.Validate(sourceFilePath)...)
 	}
-	results = append(results, c.validateEnt(sourceFilePath)...)
+	results = append(results, entValidateConfig(c, sourceFilePath)...)
 	return results
-}
-
-func (c *Config) validateEnt(sourceFilePath string) []configutil.ConfigError {
-	return entConfigValidate(c, sourceFilePath)
 }
 
 // DevConfig is a Config that is used for dev mode of Vault.
@@ -174,13 +174,13 @@ ui = true
 }
 
 // DevTLSConfig is a Config that is used for dev tls mode of Vault.
-func DevTLSConfig(storageType, certDir string) (*Config, error) {
+func DevTLSConfig(storageType, certDir string, extraSANs []string) (*Config, error) {
 	ca, err := GenerateCA()
 	if err != nil {
 		return nil, err
 	}
 
-	cert, key, err := GenerateCert(ca.Template, ca.Signer)
+	cert, key, err := generateCert(ca.Template, ca.Signer, extraSANs)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,10 @@ func DevTLSConfig(storageType, certDir string) (*Config, error) {
 	if err := os.WriteFile(fmt.Sprintf("%s/%s", certDir, VaultDevKeyFilename), []byte(key), 0o400); err != nil {
 		return nil, err
 	}
+	return parseDevTLSConfig(storageType, certDir)
+}
 
+func parseDevTLSConfig(storageType, certDir string) (*Config, error) {
 	hclStr := `
 disable_mlock = true
 
@@ -219,8 +222,8 @@ storage "%s" {
 
 ui = true
 `
-
-	hclStr = fmt.Sprintf(hclStr, certDir, certDir, storageType)
+	certDirEscaped := strings.Replace(certDir, "\\", "\\\\", -1)
+	hclStr = fmt.Sprintf(hclStr, certDirEscaped, certDirEscaped, storageType)
 	parsed, err := ParseConfig(hclStr, "")
 	if err != nil {
 		return nil, err
@@ -366,6 +369,11 @@ func (c *Config) Merge(c2 *Config) *Config {
 		result.PluginDirectory = c2.PluginDirectory
 	}
 
+	result.PluginTmpdir = c.PluginTmpdir
+	if c2.PluginTmpdir != "" {
+		result.PluginTmpdir = c2.PluginTmpdir
+	}
+
 	result.PluginFileUid = c.PluginFileUid
 	if c2.PluginFileUid != 0 {
 		result.PluginFileUid = c2.PluginFileUid
@@ -407,6 +415,11 @@ func (c *Config) Merge(c2 *Config) *Config {
 		result.DetectDeadlocks = c2.DetectDeadlocks
 	}
 
+	result.ImpreciseLeaseRoleTracking = c.ImpreciseLeaseRoleTracking
+	if c2.ImpreciseLeaseRoleTracking {
+		result.ImpreciseLeaseRoleTracking = c2.ImpreciseLeaseRoleTracking
+	}
+
 	result.EnableResponseHeaderRaftNodeID = c.EnableResponseHeaderRaftNodeID
 	if c2.EnableResponseHeaderRaftNodeID {
 		result.EnableResponseHeaderRaftNodeID = c2.EnableResponseHeaderRaftNodeID
@@ -415,6 +428,16 @@ func (c *Config) Merge(c2 *Config) *Config {
 	result.LicensePath = c.LicensePath
 	if c2.LicensePath != "" {
 		result.LicensePath = c2.LicensePath
+	}
+
+	result.EnablePostUnsealTrace = c.EnablePostUnsealTrace
+	if c2.EnablePostUnsealTrace {
+		result.EnablePostUnsealTrace = c2.EnablePostUnsealTrace
+	}
+
+	result.PostUnsealTraceDir = c.PostUnsealTraceDir
+	if c2.PostUnsealTraceDir != "" {
+		result.PostUnsealTraceDir = c2.PostUnsealTraceDir
 	}
 
 	// Use values from top-level configuration for storage if set
@@ -440,6 +463,11 @@ func (c *Config) Merge(c2 *Config) *Config {
 		if result.DisableClusteringRaw != nil {
 			haStorage.DisableClustering = result.DisableClustering
 		}
+	}
+
+	result.AdministrativeNamespacePath = c.AdministrativeNamespacePath
+	if c2.AdministrativeNamespacePath != "" {
+		result.AdministrativeNamespacePath = c2.AdministrativeNamespacePath
 	}
 
 	result.entConfig = c.entConfig.Merge(c2.entConfig)
@@ -489,13 +517,21 @@ func CheckConfig(c *Config, e error) (*Config, error) {
 		return c, e
 	}
 
-	if len(c.Seals) == 2 {
-		switch {
-		case c.Seals[0].Disabled && c.Seals[1].Disabled:
-			return nil, errors.New("seals: two seals provided but both are disabled")
-		case !c.Seals[0].Disabled && !c.Seals[1].Disabled:
-			return nil, errors.New("seals: two seals provided but neither is disabled")
+	if err := c.checkSealConfig(); err != nil {
+		return nil, err
+	}
+
+	sealMap := make(map[string]*configutil.KMS)
+	for _, seal := range c.Seals {
+		if seal.Name == "" {
+			return nil, errors.New("seals: seal name is empty")
 		}
+
+		if _, ok := sealMap[seal.Name]; ok {
+			return nil, errors.New("seals: seal names must be unique")
+		}
+
+		sealMap[seal.Name] = seal
 	}
 
 	return c, nil
@@ -727,7 +763,7 @@ func ParseConfig(d, source string) (*Config, error) {
 		return nil, fmt.Errorf("error validating experiment(s) from config: %w", err)
 	}
 
-	if err := result.parseConfig(list); err != nil {
+	if err := result.parseConfig(list, source); err != nil {
 		return nil, fmt.Errorf("error parsing enterprise config: %w", err)
 	}
 
@@ -766,7 +802,7 @@ func ExperimentsFromEnvAndCLI(config *Config, envKey string, flagExperiments []s
 	return nil
 }
 
-// Validate checks each experiment is a known experiment.
+// validateExperiments checks each experiment is a known experiment.
 func validateExperiments(experiments []string) error {
 	var invalid []string
 
@@ -900,33 +936,49 @@ func ParseStorage(result *Config, list *ast.ObjectList, name string) error {
 	}
 
 	m := make(map[string]string)
-	for key, val := range config {
-		valStr, ok := val.(string)
+	for k, v := range config {
+		vStr, ok := v.(string)
 		if ok {
-			m[key] = valStr
+			var err error
+			m[k], err = normalizeStorageConfigAddresses(key, k, vStr)
+			if err != nil {
+				return err
+			}
 			continue
 		}
-		valBytes, err := json.Marshal(val)
-		if err != nil {
-			return err
+
+		var err error
+		var vBytes []byte
+		// Raft's retry_join requires special normalization due to its complexity
+		if key == "raft" && k == "retry_join" {
+			vBytes, err = normalizeRaftRetryJoin(v)
+			if err != nil {
+				return err
+			}
+		} else {
+			vBytes, err = json.Marshal(v)
+			if err != nil {
+				return err
+			}
 		}
-		m[key] = string(valBytes)
+
+		m[k] = string(vBytes)
 	}
 
 	// Pull out the redirect address since it's common to all backends
 	var redirectAddr string
 	if v, ok := m["redirect_addr"]; ok {
-		redirectAddr = v
+		redirectAddr = configutil.NormalizeAddr(v)
 		delete(m, "redirect_addr")
 	} else if v, ok := m["advertise_addr"]; ok {
-		redirectAddr = v
+		redirectAddr = configutil.NormalizeAddr(v)
 		delete(m, "advertise_addr")
 	}
 
 	// Pull out the cluster address since it's common to all backends
 	var clusterAddr string
 	if v, ok := m["cluster_addr"]; ok {
-		clusterAddr = v
+		clusterAddr = configutil.NormalizeAddr(v)
 		delete(m, "cluster_addr")
 	}
 
@@ -942,11 +994,11 @@ func ParseStorage(result *Config, list *ast.ObjectList, name string) error {
 
 	// Override with top-level values if they are set
 	if result.APIAddr != "" {
-		redirectAddr = result.APIAddr
+		redirectAddr = configutil.NormalizeAddr(result.APIAddr)
 	}
 
 	if result.ClusterAddr != "" {
-		clusterAddr = result.ClusterAddr
+		clusterAddr = configutil.NormalizeAddr(result.ClusterAddr)
 	}
 
 	if result.DisableClusteringRaw != nil {
@@ -961,6 +1013,117 @@ func ParseStorage(result *Config, list *ast.ObjectList, name string) error {
 		Config:            m,
 	}
 	return nil
+}
+
+// storageAddressKeys maps a storage backend type to its associated
+// configuration whose values are URLs, IP addresses, or host:port style
+// addresses. All physical storage types must have an entry in this map,
+// otherwise our normalization check will fail when parsing the storage entry
+// config. Physical storage types which don't contain such keys should include
+// an empty array.
+var storageAddressKeys = map[string][]string{
+	"aerospike":              {"hostname"},
+	"alicloudoss":            {"endpoint"},
+	"azure":                  {"arm_endpoint"},
+	"cassandra":              {"hosts"},
+	"cockroachdb":            {"connection_url"},
+	"consul":                 {"address", "service_address"},
+	"couchdb":                {"endpoint"},
+	"dynamodb":               {"endpoint"},
+	"etcd":                   {"address", "discovery_srv"},
+	"file":                   {},
+	"filesystem":             {},
+	"foundationdb":           {},
+	"gcs":                    {},
+	"inmem":                  {},
+	"inmem_ha":               {},
+	"inmem_transactional":    {},
+	"inmem_transactional_ha": {},
+	"manta":                  {"url"},
+	"mssql":                  {"server"},
+	"mysql":                  {"address"},
+	"oci":                    {},
+	"postgresql":             {"connection_url"},
+	"raft":                   {}, // retry_join is handled separately in normalizeRaftRetryJoin()
+	"s3":                     {"endpoint"},
+	"spanner":                {},
+	"swift":                  {"auth_url", "storage_url"},
+	"zookeeper":              {"address"},
+}
+
+// normalizeStorageConfigAddresses takes a storage name, a configuration key
+// and it's associated value and will normalize any URLs, IP addresses, or
+// host:port style addresses.
+func normalizeStorageConfigAddresses(storage string, key string, value string) (string, error) {
+	keys, ok := storageAddressKeys[storage]
+	if !ok {
+		return "", fmt.Errorf("unknown storage type %s", storage)
+	}
+
+	if slices.Contains(keys, key) {
+		return configutil.NormalizeAddr(value), nil
+	}
+
+	return value, nil
+}
+
+// normalizeRaftRetryJoin takes the hcl decoded value representation of a
+// retry_join stanza and normalizes any URLs, IP addresses, or host:port style
+// addresses, and returns the value encoded as JSON.
+func normalizeRaftRetryJoin(val any) ([]byte, error) {
+	res := []map[string]any{}
+
+	// Depending on whether the retry_join stanzas were configured as an attribute,
+	// a block, or a mixture of both, we'll get different values from which we
+	// need to extract our individual retry joins stanzas.
+	stanzas := []map[string]any{}
+	if retryJoin, ok := val.([]map[string]any); ok {
+		// retry_join stanzas are defined as blocks
+		stanzas = retryJoin
+	} else {
+		// retry_join stanzas are defined as attributes or attributes and blocks
+		retryJoin, ok := val.([]any)
+		if !ok {
+			// retry_join stanzas have not been configured correctly
+			return nil, fmt.Errorf("malformed retry_join stanza: %v", val)
+		}
+
+		for _, stanza := range retryJoin {
+			stanzaVal, ok := stanza.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("malformed retry_join stanza: %v", stanza)
+			}
+			stanzas = append(stanzas, stanzaVal)
+		}
+	}
+
+	for _, stanza := range stanzas {
+		normalizedStanza := map[string]any{}
+		for k, v := range stanza {
+			switch k {
+			case "auto_join":
+				cfg, err := discover.Parse(v.(string))
+				if err != nil {
+					return nil, err
+				}
+				for k, v := range cfg {
+					// These are auto_join keys that are valid for the provider in go-discover
+					if slices.Contains([]string{"domain", "auth_url", "url", "host"}, k) {
+						cfg[k] = configutil.NormalizeAddr(v)
+					}
+				}
+				normalizedStanza[k] = cfg.String()
+			case "leader_api_addr":
+				normalizedStanza[k] = configutil.NormalizeAddr(v.(string))
+			default:
+				normalizedStanza[k] = v
+			}
+		}
+
+		res = append(res, normalizedStanza)
+	}
+
+	return json.Marshal(res)
 }
 
 func parseHAStorage(result *Config, list *ast.ObjectList, name string) error {
@@ -982,33 +1145,49 @@ func parseHAStorage(result *Config, list *ast.ObjectList, name string) error {
 	}
 
 	m := make(map[string]string)
-	for key, val := range config {
-		valStr, ok := val.(string)
+	for k, v := range config {
+		vStr, ok := v.(string)
 		if ok {
-			m[key] = valStr
+			var err error
+			m[k], err = normalizeStorageConfigAddresses(key, k, vStr)
+			if err != nil {
+				return err
+			}
 			continue
 		}
-		valBytes, err := json.Marshal(val)
-		if err != nil {
-			return err
+
+		var err error
+		var vBytes []byte
+		// Raft's retry_join requires special normalization due to its complexity
+		if key == "raft" && k == "retry_join" {
+			vBytes, err = normalizeRaftRetryJoin(v)
+			if err != nil {
+				return err
+			}
+		} else {
+			vBytes, err = json.Marshal(v)
+			if err != nil {
+				return err
+			}
 		}
-		m[key] = string(valBytes)
+
+		m[k] = string(vBytes)
 	}
 
 	// Pull out the redirect address since it's common to all backends
 	var redirectAddr string
 	if v, ok := m["redirect_addr"]; ok {
-		redirectAddr = v
+		redirectAddr = configutil.NormalizeAddr(v)
 		delete(m, "redirect_addr")
 	} else if v, ok := m["advertise_addr"]; ok {
-		redirectAddr = v
+		redirectAddr = configutil.NormalizeAddr(v)
 		delete(m, "advertise_addr")
 	}
 
 	// Pull out the cluster address since it's common to all backends
 	var clusterAddr string
 	if v, ok := m["cluster_addr"]; ok {
-		clusterAddr = v
+		clusterAddr = configutil.NormalizeAddr(v)
 		delete(m, "cluster_addr")
 	}
 
@@ -1024,11 +1203,11 @@ func parseHAStorage(result *Config, list *ast.ObjectList, name string) error {
 
 	// Override with top-level values if they are set
 	if result.APIAddr != "" {
-		redirectAddr = result.APIAddr
+		redirectAddr = configutil.NormalizeAddr(result.APIAddr)
 	}
 
 	if result.ClusterAddr != "" {
-		clusterAddr = result.ClusterAddr
+		clusterAddr = configutil.NormalizeAddr(result.ClusterAddr)
 	}
 
 	if result.DisableClusteringRaw != nil {
@@ -1060,6 +1239,12 @@ func parseServiceRegistration(result *Config, list *ast.ObjectList, name string)
 	var m map[string]string
 	if err := hcl.DecodeObject(&m, item.Val); err != nil {
 		return multierror.Prefix(err, fmt.Sprintf("%s.%s:", name, key))
+	}
+
+	if key == "consul" {
+		if addr, ok := m["address"]; ok {
+			m["address"] = configutil.NormalizeAddr(addr)
+		}
 	}
 
 	result.ServiceRegistration = &ServiceRegistration{
@@ -1099,6 +1284,7 @@ func (c *Config) Sanitized() map[string]interface{} {
 		"cluster_cipher_suites": c.ClusterCipherSuites,
 
 		"plugin_directory": c.PluginDirectory,
+		"plugin_tmpdir":    c.PluginTmpdir,
 
 		"plugin_file_uid": c.PluginFileUid,
 
@@ -1126,6 +1312,11 @@ func (c *Config) Sanitized() map[string]interface{} {
 		"experiments":        c.Experiments,
 
 		"detect_deadlocks": c.DetectDeadlocks,
+
+		"imprecise_lease_role_tracking": c.ImpreciseLeaseRoleTracking,
+
+		"enable_post_unseal_trace":    c.EnablePostUnsealTrace,
+		"post_unseal_trace_directory": c.PostUnsealTraceDir,
 	}
 	for k, v := range sharedResult {
 		result[k] = v
@@ -1133,23 +1324,42 @@ func (c *Config) Sanitized() map[string]interface{} {
 
 	// Sanitize storage stanza
 	if c.Storage != nil {
+		storageType := c.Storage.Type
 		sanitizedStorage := map[string]interface{}{
-			"type":               c.Storage.Type,
+			"type":               storageType,
 			"redirect_addr":      c.Storage.RedirectAddr,
 			"cluster_addr":       c.Storage.ClusterAddr,
 			"disable_clustering": c.Storage.DisableClustering,
 		}
+
+		if storageType == "raft" {
+			sanitizedStorage["raft"] = map[string]interface{}{
+				"max_entry_size": c.Storage.Config["max_entry_size"],
+			}
+			for k, v := range c.Storage.Config {
+				sanitizedStorage["raft"].(map[string]interface{})[k] = v
+			}
+		}
+
 		result["storage"] = sanitizedStorage
 	}
 
 	// Sanitize HA storage stanza
 	if c.HAStorage != nil {
+		haStorageType := c.HAStorage.Type
 		sanitizedHAStorage := map[string]interface{}{
-			"type":               c.HAStorage.Type,
+			"type":               haStorageType,
 			"redirect_addr":      c.HAStorage.RedirectAddr,
 			"cluster_addr":       c.HAStorage.ClusterAddr,
 			"disable_clustering": c.HAStorage.DisableClustering,
 		}
+
+		if haStorageType == "raft" {
+			sanitizedHAStorage["raft"] = map[string]interface{}{
+				"max_entry_size": c.HAStorage.Config["max_entry_size"],
+			}
+		}
+
 		result["ha_storage"] = sanitizedHAStorage
 	}
 
@@ -1187,4 +1397,13 @@ func (c *Config) Prune() {
 func (c *Config) found(s, k string) {
 	delete(c.UnusedKeys, s)
 	c.FoundKeys = append(c.FoundKeys, k)
+}
+
+func (c *Config) ToVaultNodeConfig() (*testcluster.VaultNodeConfig, error) {
+	var vnc testcluster.VaultNodeConfig
+	err := mapstructure.Decode(c, &vnc)
+	if err != nil {
+		return nil, err
+	}
+	return &vnc, nil
 }
