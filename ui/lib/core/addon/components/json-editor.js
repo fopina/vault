@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Component from '@glimmer/component';
@@ -10,11 +10,10 @@ import { action } from '@ember/object';
  * @module JsonEditor
  *
  * @example
- * ```js
- * <JsonEditor @title="Policy" @value={{codemirror.string}} @valueUpdated={{ action "codemirrorUpdate"}} />
- * ```
+ * <JsonEditor @title="Policy" @value={{hash foo="bar"}} @viewportMargin={{100}} />
  *
  * @param {string} [title] - Name above codemirror view
+ * @param {boolean} [showToolbar=true] - If false, toolbar and title are hidden
  * @param {string} value - a specific string the comes from codemirror. It's the value inside the codemirror display
  * @param {Function} [valueUpdated] - action to preform when you edit the codemirror value.
  * @param {Function} [onFocusOut] - action to preform when you focus out of codemirror.
@@ -25,12 +24,22 @@ import { action } from '@ember/object';
  * @param {Boolean} [readOnly] - Sets the view to readOnly, allowing for copying but no editing. It also hides the cursor. Defaults to false.
  * @param {String} [theme] - Specify or customize the look via a named "theme" class in scss.
  * @param {String} [value] - Value within the display. Generally, a json string.
- * @param {String} [viewportMargin] - Size of viewport. Often set to "Infinity" to load/show all text regardless of length.
+ * @param {String} [viewportMargin] - Specifies the amount of lines rendered on the DOM (this is not the editor display height). The codemirror default is 10 which we set explicity in the code-mirror modifier per the recommendations from the codemirror docs.
+ * @param {string} [example] - Example to show when value is null -- when example is provided a restore action will render in the toolbar to clear the current value and show the example after input
+ * @param {string} [screenReaderLabel] - This label is read by the screen readers when CodeMirror text area is focused. This is helpful for accessibility.
+ * @param {string} [container] - **REQUIRED if rendering within a modal** Selector string or element object of containing element, set the focused element as the container value. This is for the Hds::Copy::Button and to set `autoRefresh=true` so content renders https://hds-website-hashicorp.vercel.app/components/copy/button?tab=code
+ *
  */
 
 export default class JsonEditorComponent extends Component {
   get getShowToolbar() {
     return this.args.showToolbar === false ? false : true;
+  }
+
+  @action
+  onSetup(editor) {
+    // store reference to codemirror editor so that it can be passed to valueUpdated when restoring example
+    this._codemirrorEditor = editor;
   }
 
   @action
@@ -46,5 +55,11 @@ export default class JsonEditorComponent extends Component {
     if (this.args.onFocusOut) {
       this.args.onFocusOut(...args);
     }
+  }
+
+  @action
+  restoreExample() {
+    // set value to null which will cause the example value to be passed into the editor
+    this.args.valueUpdated(null, this._codemirrorEditor);
   }
 }

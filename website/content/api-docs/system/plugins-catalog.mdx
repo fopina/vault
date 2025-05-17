@@ -10,7 +10,7 @@ The `/sys/plugins/catalog` endpoint is used to read, register, update, and
 remove plugins in Vault's catalog. Plugins must be registered before use, and
 once registered backends can use the plugin by querying the catalog.
 
-## LIST Plugins
+## LIST plugins
 
 This endpoint lists the plugins in the catalog by type.
 
@@ -18,7 +18,7 @@ This endpoint lists the plugins in the catalog by type.
 | :----- | :--------------------- |
 | `GET`  | `/sys/plugins/catalog` |
 
-### Sample Request
+### Sample request
 
 ```shell-session
 $ curl \
@@ -26,7 +26,7 @@ $ curl \
     http://127.0.0.1:8200/v1/sys/plugins/catalog
 ```
 
-### Sample Response
+### Sample response
 
 ```json
 {
@@ -69,19 +69,29 @@ $ curl \
                 "version": "v1.12.0+builtin.vault"
             },
             ...
+            {
+                "builtin": false,
+                "name": "example-plugin",
+                "type": "secret",
+                "oci_image": "example-secret-plugin-oci-image",
+                "runtime": "example-runtime",
+                "version": "v1.0.0"
+            },
+            ...
         ],
         "secret": [
             "ad",
             "aws",
             "azure",
             "gcp",
-            "transit"
+            "transit",
+            "example-plugin",
         ]
     }
 }
 ```
 
-## LIST Plugins
+## LIST plugins
 
 This endpoint lists the plugins in the catalog by type.
 
@@ -91,7 +101,7 @@ This endpoint lists the plugins in the catalog by type.
 | `LIST` | `/sys/plugins/catalog/database` |
 | `LIST` | `/sys/plugins/catalog/secret`   |
 
-### Sample Request
+### Sample request
 
 ```shell-session
 $ curl \
@@ -100,7 +110,7 @@ $ curl \
     http://127.0.0.1:8200/v1/sys/plugins/catalog/auth
 ```
 
-### Sample Response
+### Sample response
 
 ```json
 {
@@ -116,7 +126,7 @@ $ curl \
 }
 ```
 
-## Register Plugin
+## Register plugin
 
 This endpoint registers a new plugin, or updates an existing one with the
 supplied name.
@@ -132,19 +142,31 @@ supplied name.
 
 - `name` `(string: <required>)` – Specifies the name for this plugin. The name
   is what is used to look up plugins in the catalog. This is part of the request
-  URL.
+  URL. Enterprise plugin names must match the name listed on the
+  [HashiCorp releases page](https://releases.hashicorp.com/)
 
 - `type` `(string: <required>)` – Specifies the type of this plugin. May be
   "auth", "database", or "secret".
 
-- `version` `(string: "")` - Specifies the semantic version of this plugin.
+- `oci_image` `(string: "")` - Specifies OCI image to run. If specified, setting `command`,
+  `args`, and `env` will update the container's entrypoint, args, and environment
+  variables (append-only) respectively.
 
-- `sha256` `(string: <required>)` – This is the SHA256 sum of the plugin's
-  binary. Before a plugin is run it's SHA will be checked against this value, if
-  they do not match the plugin can not be run.
+- `runtime` `(string: "")` - Specifies Vault plugin runtime to use if `oci_image` is specified.
+  See [/sys/plugins/runtimes/catalog](/vault/api-docs/system/plugins-runtimes-catalog) for additional information.
 
-- `command` `(string: <required>)` – Specifies the command used to execute the
-  plugin. This is relative to the plugin directory. e.g. `"myplugin"`.
+- `version` `(string: "")` - Specifies the semantic version of the plugin. Used as the tag
+  when specifying `oci_image`, but with any leading 'v' trimmed.
+
+- `sha256` `(string: <required>)` – The SHA256 sum of a Community plugin
+  binary or the OCI image. Before a plugin is run, its SHA will be checked against this value.
+  If the actual SHA of the plugin binary and the SHA provided in `sha256` do not match, Vault will not run the plugin. The `sha256` parameter is only required for Community plugins. Enterprise plugins do not require SHA confirmation.
+
+- `command` `(string: <required>)` - Specifies the command used to execute the
+  plugin. This is relative to the plugin directory. e.g. `"myplugin"`, or if `oci_image`
+  is also specified, it is relative to the image's working directory.
+  The `command` parameter is only required for Community plugins as
+  the run command is known for Enterprise plugins.
 
 - `args` `(array: [])` – Specifies the arguments used to execute the plugin. If
   the arguments are provided here, the `command` parameter should only contain
@@ -154,16 +176,39 @@ supplied name.
   execution of the plugin. Each entry is of the form "key=value". e.g
   `"FOO=BAR"`.
 
-### Sample Payload
+### Sample payload
+
+#### Community plugins
 
 ```json
 {
   "sha256": "d130b9a0fbfddef9709d8ff92e5e6053ccd246b78632fc03b8548457026961e9",
-  "command": "mysql-database-plugin"
+  "command": "mysql-database-plugin",
+  "type": "database"
 }
 ```
 
-### Sample Request
+#### Enterprise plugins
+
+```json
+{
+  "version": "0.16.0+ent",
+  "name": "vault-plugin-secrets-keymgmt",
+  "type": "secret"
+}
+```
+
+### Sample payload using OCI image
+
+```json
+{
+  "sha256": "d150b9a0fbfddef9709d8ff92e5e6053ccd246b78632fc03b8548457026961a9",
+  "oci_image": "example-secret-plugin-oci-image",
+  "runtime": "example-runtime"
+}
+```
+
+### Sample request
 
 ```shell-session
 $ curl \
@@ -173,7 +218,7 @@ $ curl \
     http://127.0.0.1:8200/v1/sys/plugins/catalog/secret/example-plugin
 ```
 
-## Read Plugin
+## Read plugin
 
 This endpoint returns the configuration data for the plugin with the given name.
 
@@ -195,7 +240,7 @@ This endpoint returns the configuration data for the plugin with the given name.
 - `version` `(string: "")` – The semantic version of the plugin to read. Required
   if the plugin was registered with a version.
 
-### Sample Request
+### Sample request
 
 ```shell-session
 $ curl \
@@ -204,14 +249,16 @@ $ curl \
     http://127.0.0.1:8200/v1/sys/plugins/catalog/secret/example-plugin?version=v1.0.0
 ```
 
-### Sample Response
+### Sample response
 
 ```json
 {
   "data": {
     "args": [],
     "builtin": false,
-    "command": "/tmp/vault-plugins/mysql-database-plugin",
+    "runtime": "example-runtime",
+    "oci_image": "example-secret-plugin-oci-image",
+    "command": "/example-secret-plugin",
     "name": "example-plugin",
     "sha256": "0TC5oPv93vlwnY/5Ll5gU8zSRreGMvwDuFSEVwJpYek=",
     "version": "v1.0.0"
@@ -219,7 +266,7 @@ $ curl \
 }
 ```
 
-## Remove Plugin from Catalog
+## Remove plugin from catalog
 
 This endpoint removes the plugin with the given name.
 
@@ -241,7 +288,7 @@ This endpoint removes the plugin with the given name.
 - `version` `(string: "")` – Specifies the semantic version of the plugin
   to delete.
 
-### Sample Request
+### Sample request
 
 ```shell-session
 $ curl \

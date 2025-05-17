@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Application from '@ember/application';
@@ -13,16 +13,41 @@ export default class App extends Application {
   podModulePrefix = config.podModulePrefix;
   Resolver = Resolver;
   engines = {
-    openApiExplorer: {
+    'config-ui': {
       dependencies: {
-        services: ['auth', 'flash-messages', 'namespace', 'router', 'version'],
+        services: [
+          'auth',
+          'flash-messages',
+          'namespace',
+          { 'app-router': 'router' },
+          'store',
+          'pagination',
+          'version',
+          'custom-messages',
+        ],
+      },
+    },
+    'open-api-explorer': {
+      dependencies: {
+        services: ['auth', 'flash-messages', 'namespace', { 'app-router': 'router' }, 'version'],
       },
     },
     replication: {
       dependencies: {
-        services: ['auth', 'flash-messages', 'namespace', 'replication-mode', 'router', 'store', 'version'],
+        services: [
+          'auth',
+          'capabilities',
+          'flash-messages',
+          'namespace',
+          'replication-mode',
+          { 'app-router': 'router' },
+          'store',
+          'version',
+          '-portal',
+        ],
         externalRoutes: {
           replication: 'vault.cluster.replication.index',
+          vault: 'vault.cluster',
         },
       },
     },
@@ -34,8 +59,9 @@ export default class App extends Application {
           'flash-messages',
           'namespace',
           'path-help',
-          'router',
+          { 'app-router': 'router' },
           'store',
+          'pagination',
           'version',
           'secret-mount-path',
         ],
@@ -46,9 +72,44 @@ export default class App extends Application {
     },
     kubernetes: {
       dependencies: {
-        services: ['router', 'store', 'secret-mount-path', 'flashMessages'],
+        services: [{ 'app-router': 'router' }, 'store', 'secret-mount-path', 'flash-messages'],
         externalRoutes: {
           secrets: 'vault.cluster.secrets.backends',
+        },
+      },
+    },
+    ldap: {
+      dependencies: {
+        services: [
+          { 'app-router': 'router' },
+          'store',
+          'pagination',
+          'secret-mount-path',
+          'flash-messages',
+          'auth',
+        ],
+        externalRoutes: {
+          secrets: 'vault.cluster.secrets.backends',
+        },
+      },
+    },
+    kv: {
+      dependencies: {
+        services: [
+          'capabilities',
+          'control-group',
+          'download',
+          'flash-messages',
+          'namespace',
+          { 'app-router': 'router' },
+          'secret-mount-path',
+          'store',
+          'pagination',
+          'version',
+        ],
+        externalRoutes: {
+          secrets: 'vault.cluster.secrets.backends',
+          syncDestination: 'vault.cluster.sync.secrets.destinations.destination',
         },
       },
     },
@@ -60,16 +121,25 @@ export default class App extends Application {
           'flash-messages',
           'namespace',
           'path-help',
-          'router',
+          { 'app-router': 'router' },
           'secret-mount-path',
           'store',
+          'pagination',
           'version',
         ],
         externalRoutes: {
           secrets: 'vault.cluster.secrets.backends',
           externalMountIssuer: 'vault.cluster.secrets.backend.pki.issuers.issuer.details',
-          secretsListRoot: 'vault.cluster.secrets.backend.list-root',
           secretsListRootConfiguration: 'vault.cluster.secrets.backend.configuration',
+        },
+      },
+    },
+    sync: {
+      dependencies: {
+        services: ['flash-messages', 'flags', { 'app-router': 'router' }, 'store', 'pagination', 'version'],
+        externalRoutes: {
+          kvSecretOverview: 'vault.cluster.secrets.backend.kv.secret.index',
+          clientCountOverview: 'vault.cluster.clients',
         },
       },
     },
@@ -77,3 +147,7 @@ export default class App extends Application {
 }
 
 loadInitializers(App, config.modulePrefix);
+
+/**
+ * @typedef {import('ember-source/types')} EmberTypes
+ */

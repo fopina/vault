@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package command
 
@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hashicorp/cli"
 	"github.com/hashicorp/vault/api"
-	"github.com/mitchellh/cli"
+	"github.com/hashicorp/vault/internalshared/configutil"
 	"github.com/posener/complete"
 )
 
@@ -45,7 +46,7 @@ Usage: vault operator raft join [options] <leader-api-addr|auto-join-configurati
   configuration.
 
       $ vault operator raft join "provider=aws region=eu-west-1 ..."
-			
+
   Join the current node as a peer to the Raft cluster by providing cloud auto-join
   configuration with an explicit URI scheme and port.
 
@@ -195,7 +196,7 @@ func (c *OperatorRaftJoinCommand) Run(args []string) int {
 		joinReq.AutoJoinScheme = c.flagAutoJoinScheme
 		joinReq.AutoJoinPort = c.flagAutoJoinPort
 	} else {
-		joinReq.LeaderAPIAddr = leaderInfo
+		joinReq.LeaderAPIAddr = configutil.NormalizeAddr(leaderInfo)
 	}
 
 	resp, err := client.Sys().RaftJoin(joinReq)

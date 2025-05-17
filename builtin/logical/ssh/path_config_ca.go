@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package ssh
 
@@ -10,7 +10,6 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -19,10 +18,10 @@ import (
 
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/vault/sdk/framework"
+	"github.com/hashicorp/vault/sdk/helper/cryptoutil"
 	"github.com/hashicorp/vault/sdk/logical"
-	"golang.org/x/crypto/ssh"
-
 	"github.com/mikesmitty/edkey"
+	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -41,6 +40,11 @@ type keyStorageEntry struct {
 func pathConfigCA(b *backend) *framework.Path {
 	return &framework.Path{
 		Pattern: "config/ca",
+
+		DisplayAttrs: &framework.DisplayAttributes{
+			OperationPrefix: operationPrefixSSH,
+		},
+
 		Fields: map[string]*framework.FieldSchema{
 			"private_key": {
 				Type:        framework.TypeString,
@@ -67,10 +71,26 @@ func pathConfigCA(b *backend) *framework.Path {
 			},
 		},
 
-		Callbacks: map[logical.Operation]framework.OperationFunc{
-			logical.UpdateOperation: b.pathConfigCAUpdate,
-			logical.DeleteOperation: b.pathConfigCADelete,
-			logical.ReadOperation:   b.pathConfigCARead,
+		Operations: map[logical.Operation]framework.OperationHandler{
+			logical.UpdateOperation: &framework.PathOperation{
+				Callback: b.pathConfigCAUpdate,
+				DisplayAttrs: &framework.DisplayAttributes{
+					OperationVerb:   "configure",
+					OperationSuffix: "ca",
+				},
+			},
+			logical.DeleteOperation: &framework.PathOperation{
+				Callback: b.pathConfigCADelete,
+				DisplayAttrs: &framework.DisplayAttributes{
+					OperationSuffix: "ca-configuration",
+				},
+			},
+			logical.ReadOperation: &framework.PathOperation{
+				Callback: b.pathConfigCARead,
+				DisplayAttrs: &framework.DisplayAttributes{
+					OperationSuffix: "ca-configuration",
+				},
+			},
 		},
 
 		HelpSynopsis: `Set the SSH private key used for signing certificates.`,
@@ -306,7 +326,7 @@ func generateSSHKeyPair(randomSource io.Reader, keyType string, keyBits int) (st
 			return "", "", fmt.Errorf("refusing to generate weak %v key: %v bits < 2048 bits", keyType, keyBits)
 		}
 
-		privateSeed, err := rsa.GenerateKey(randomSource, keyBits)
+		privateSeed, err := cryptoutil.GenerateRSAKey(randomSource, keyBits)
 		if err != nil {
 			return "", "", err
 		}
